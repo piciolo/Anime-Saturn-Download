@@ -44,6 +44,7 @@ from .net import (
 )
 from .settings import MAX_CONCURRENCY, AppSettings
 from .theme import APP_QSS, GOOD, WARN
+from .player import PlayerWindow
 from .widgets import AnimeCard, DownloadRow, MultiSelectDropdown
 from .workers import DownloadTask, EpisodesWorker, PosterWorker, SearchWorker
 
@@ -101,6 +102,7 @@ class MainWindow(QMainWindow):
         self._tasks: dict[int, DownloadTask] = {}
         self._rows: dict[int, DownloadRow] = {}
         self._task_counter = 0
+        self._players: set = set()
 
         self.setWindowTitle("AnimeSaturn Downloader")
         self.resize(1180, 820)
@@ -361,6 +363,10 @@ class MainWindow(QMainWindow):
 
         self.episode_list = QListWidget()
         self.episode_list.setUniformItemSizes(True)
+        self.episode_list.setToolTip(
+            "Doppio clic su un episodio per l'anteprima in streaming"
+        )
+        self.episode_list.itemDoubleClicked.connect(self._preview_episode)
         layout.addWidget(self.episode_list, 1)
 
         bottom = QHBoxLayout()
@@ -368,6 +374,14 @@ class MainWindow(QMainWindow):
         self.episodes_status.setObjectName("Muted")
         bottom.addWidget(self.episodes_status)
         bottom.addStretch(1)
+        self.preview_button = QPushButton("👁  Anteprima")
+        self.preview_button.setObjectName("Ghost")
+        self.preview_button.setToolTip(
+            "Guarda l'episodio in streaming prima di scaricarlo "
+            "(anche doppio clic su un episodio)"
+        )
+        self.preview_button.clicked.connect(self._preview_current)
+        bottom.addWidget(self.preview_button)
         self.download_button = QPushButton("⬇  Scarica selezionati")
         self.download_button.setObjectName("Primary")
         self.download_button.clicked.connect(self._download_selected)
@@ -687,6 +701,42 @@ class MainWindow(QMainWindow):
         return result
 
     # ------------------------------------------------------------------ #
+    # Preview player
+    # ------------------------------------------------------------------ #
+    def _preview_episode(self, item) -> None:
+        episode = item.data(Qt.UserRole)
+        if episode is not None:
+            self._open_player(episode)
+
+    def _preview_current(self) -> None:
+        item = self.episode_list.currentItem()
+        if item is None and self.episode_list.count():
+            item = self.episode_list.item(0)
+        if item is None:
+            QMessageBox.information(
+                self, "Anteprima", "Non ci sono episodi da guardare."
+            )
+            return
+        self._preview_episode(item)
+
+    def _open_player(self, episode: Episode) -> None:
+        if not self._detail_anime:
+            return
+        window = PlayerWindow(
+            self.client, self._detail_anime.title, episode, self.io_pool, self
+        )
+        window.download_requested.connect(self._enqueue_one)
+        window.finished.connect(lambda _result, w=window: self._players.discard(w))
+        self._players.add(window)
+        window.show()
+
+    def _enqueue_one(self, anime_title: str, episode: Episode) -> None:
+        dest_dir = Path(self.settings.download_dir) / sanitize_name(anime_title)
+        self._enqueue_download(anime_title, episode, dest_dir)
+        self.tabs.setCurrentIndex(1)
+        self._update_empty_queue()
+
+    # ------------------------------------------------------------------ #
     # Downloads
     # ------------------------------------------------------------------ #
     def _download_selected(self) -> None:
@@ -788,6 +838,9 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ #
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # Close any open preview windows first (stops their media playback cleanly).
+        for window in list(self._players):
+            window.close()
         # Cancel in-flight downloads (this also closes their live streams), then give
         # the pool a bounded moment to unwind before closing the shared HTTP client.
         for task in self._tasks.values():

@@ -25,6 +25,10 @@
   e **anni**, con **ordinamento** (rilevanza, ultime aggiunte, A–Z, Z–A, meno recenti).
 - 🇮🇹 Filtro **Sub/Dub**: tutti, solo **doppiati (ITA)** o solo **sottotitolati**.
 - 📺 Scheda anime con **trama, copertina e lista episodi**.
+- ▶️ **Anteprima in streaming**: guarda l'episodio **dentro l'app** (player integrato con
+  play/pausa, avanzamento, volume, schermo intero) per capire se ti piace **prima** di
+  scaricarlo — *doppio clic* su un episodio o pulsante **👁 Anteprima**; dal player puoi
+  anche scaricarlo con un clic.
 - ✅ Selezione episodi: **singoli**, **tutti** o **intervallo** (es. dal 5 al 12).
 - 📥 **Coda di download** con barra di avanzamento, velocità, download **simultanei**
   regolabili, **annulla** immediato e **cartella personalizzabile**.

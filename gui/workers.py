@@ -105,6 +105,33 @@ class PosterWorker(QRunnable):
             self.signals.error.emit(self.url)
 
 
+class ResolveSignals(QObject):
+    done = Signal(object, str)   # token, media_url
+    error = Signal(object, str)  # token, message
+
+
+class ResolveWorker(QRunnable):
+    """Resolve an episode's watch page to a direct media URL, off the UI thread.
+
+    Used by the in-app preview player so the UI never blocks while the embed/playlist
+    round-trip runs.
+    """
+
+    def __init__(self, client: AnimeSaturnClient, token: object, watch_path: str) -> None:
+        super().__init__()
+        self.client = client
+        self.token = token
+        self.watch_path = watch_path
+        self.signals = ResolveSignals()
+
+    def run(self) -> None:
+        try:
+            url = self.client.resolve_download_url(self.watch_path)
+            self.signals.done.emit(self.token, url)
+        except Exception as exc:  # noqa: BLE001 - surfaced in the player
+            self.signals.error.emit(self.token, str(exc))
+
+
 class DownloadSignals(QObject):
     # task_id, downloaded_bytes, total_bytes, speed_bytes_per_sec
     progress = Signal(int, int, int, float)

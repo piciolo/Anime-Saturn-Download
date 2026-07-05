@@ -198,6 +198,26 @@ QProgressBar::chunk {{
     border-radius: 6px;
 }}
 
+/* Preview player (dialog + seek/volume sliders) */
+QDialog {{ background: {BG}; }}
+QDialog#Player {{ background: {BG}; }}
+QSlider::groove:horizontal {{
+    height: 5px;
+    background: {BORDER};
+    border-radius: 3px;
+}}
+QSlider::sub-page:horizontal {{
+    background: {ACCENT};
+    border-radius: 3px;
+}}
+QSlider::handle:horizontal {{
+    background: {TEXT};
+    width: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}}
+QSlider::handle:horizontal:hover {{ background: {ACCENT_HOVER}; }}
+
 /* Checkboxes */
 QCheckBox {{ spacing: 8px; }}
 QCheckBox::indicator {{
