@@ -163,8 +163,6 @@ Downloads/
 *.part
 # User-provided batch list
 URLs.txt
-# Windows exe icon (optional local asset)
-assets/logo.ico
 
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
