@@ -16,6 +16,22 @@
 
 ---
 
+## 📸 Anteprima
+
+<p align="center">
+  <img src="assets/screenshot-catalogo.png" width="100%" alt="Catalogo, ricerca e navigazione">
+</p>
+
+<p align="center">
+  <img src="assets/screenshot-filtri.png" width="49%" alt="Filtro avanzato a selezione multipla">
+  &nbsp;
+  <img src="assets/screenshot-episodi.png" width="49%" alt="Scheda anime con lista episodi">
+</p>
+
+<p align="center">
+  <img src="assets/screenshot-player.png" width="82%" alt="Anteprima in streaming integrata">
+</p>
+
 ## ✨ Caratteristiche
 
 - 🔎 **Ricerca** anime per titolo, collegata direttamente al sito.
