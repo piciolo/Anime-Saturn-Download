@@ -5,19 +5,97 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from .models import Anime
 from .net import AnimeSaturnClient
 from .workers import PosterWorker
+
+
+class MultiSelectDropdown(QPushButton):
+    """A dropdown button that opens a checkbox list for multi-value selection.
+
+    Mirrors the site's own filter controls: no selection means "all"; the button label
+    summarises the current choice. Long option lists (genres, years) scroll inside the
+    popup. ``values()`` returns the checked option values.
+    """
+
+    changed = Signal()
+
+    def __init__(self, placeholder: str, options: dict, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("FilterSelect")
+        self.setCursor(Qt.PointingHandCursor)
+        self._placeholder = placeholder
+        self._checks: dict[str, QCheckBox] = {}
+
+        menu = QMenu(self)
+        container = QWidget()
+        box = QVBoxLayout(container)
+        box.setContentsMargins(8, 8, 8, 8)
+        box.setSpacing(3)
+        for label, value in options.items():
+            if not value:  # the "Tutti"/"Ogni…" entry is implicit (no selection = all)
+                continue
+            check = QCheckBox(label)
+            check.toggled.connect(self._on_toggle)
+            box.addWidget(check)
+            self._checks[value] = check
+
+        # Long lists scroll inside the popup instead of making a giant menu.
+        if len(self._checks) > 12:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setMinimumWidth(230)
+            scroll.setMaximumHeight(320)
+            scroll.setWidget(container)
+            host: QWidget = scroll
+        else:
+            host = container
+
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(host)
+        menu.addAction(action)
+        self.setMenu(menu)
+        self._sync_text()
+
+    def _on_toggle(self, _checked: bool) -> None:
+        self._sync_text()
+        self.changed.emit()
+
+    def _sync_text(self) -> None:
+        labels = [c.text() for c in self._checks.values() if c.isChecked()]
+        if not labels:
+            self.setText(f"{self._placeholder}:  tutti")
+        elif len(labels) <= 2:
+            self.setText(f"{self._placeholder}:  " + ", ".join(labels))
+        else:
+            self.setText(f"{self._placeholder}:  {len(labels)} selezionati")
+
+    def values(self) -> list[str]:
+        """Return the checked option values (empty list = no constraint)."""
+        return [value for value, check in self._checks.items() if check.isChecked()]
+
+    def clear(self) -> None:
+        """Uncheck every option."""
+        for check in self._checks.values():
+            check.blockSignals(True)
+            check.setChecked(False)
+            check.blockSignals(False)
+        self._sync_text()
 
 POSTER_W = 176
 POSTER_H = 248

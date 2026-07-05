@@ -139,14 +139,15 @@ GENRE_OPTIONS: dict[str, str] = {
     "Yuri": "42",
 }
 
-# The /filter query parameter for each advanced dimension.
+# The /filter query parameter for each advanced dimension. Values are multi-select
+# (checkbox) on the site, submitted as PHP-style array params (``types[]=1&types[]=2``).
 FILTER_PARAMS: dict[str, str] = {
-    "category": "categories",
-    "type": "types",
-    "state": "states",
-    "season": "seasons",
-    "language": "languages",
-    "year": "years",
+    "category": "categories[]",
+    "type": "types[]",
+    "state": "states[]",
+    "season": "seasons[]",
+    "language": "languages[]",
+    "year": "years[]",
 }
 
 _FIREFOX_UA = (
@@ -251,9 +252,9 @@ class AnimeSaturnClient:
         - with no title and no filters, ``sort`` may name a browse endpoint
           (``ongoing``/``newest``);
         - otherwise it is a ``/filter`` query combining ``sort``, ``dub`` (``"1"``
-          doppiati / ``"0"`` sottotitolati) and any advanced ``filters`` (keys
-          ``category``/``type``/``state``/``season``/``language``/``year``, mapped to
-          the site's plural query params).
+          doppiati / ``"0"`` sottotitolati) and any advanced ``filters`` — a mapping of
+          ``category``/``type``/``state``/``season``/``language``/``year`` to a **list**
+          of selected values, sent as the site's array params (``types[]=1&types[]=2``).
         """
         page = max(page, 1)
         filters = {k: v for k, v in (filters or {}).items() if v}

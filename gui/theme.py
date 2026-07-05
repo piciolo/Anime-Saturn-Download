@@ -63,6 +63,38 @@ QComboBox QAbstractItemView {{
     padding: 4px;
 }}
 
+/* Multi-select filter dropdowns (button) and their checkbox popups */
+QPushButton#FilterSelect {{
+    background: {BG_ALT};
+    border: 1px solid {BORDER};
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-weight: 500;
+    text-align: left;
+    color: {TEXT};
+}}
+QPushButton#FilterSelect:hover {{ border-color: {ACCENT}; }}
+QPushButton#FilterSelect::menu-indicator {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 10px;
+}}
+
+QMenu {{
+    background: {CARD};
+    border: 1px solid {BORDER};
+    border-radius: 10px;
+    padding: 4px;
+}}
+QMenu::item {{
+    background: transparent;
+    padding: 6px 10px;
+    border-radius: 6px;
+}}
+QMenu::item:selected {{ background: {CARD_HOVER}; }}
+QMenu QCheckBox {{ padding: 5px 8px; border-radius: 6px; }}
+QMenu QCheckBox:hover {{ background: {CARD_HOVER}; }}
+
 /* Buttons */
 QPushButton {{
     background: {BG_ALT};

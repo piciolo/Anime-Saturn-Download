@@ -44,7 +44,7 @@ from .net import (
 )
 from .settings import MAX_CONCURRENCY, AppSettings
 from .theme import APP_QSS, GOOD, WARN
-from .widgets import AnimeCard, DownloadRow
+from .widgets import AnimeCard, DownloadRow, MultiSelectDropdown
 from .workers import DownloadTask, EpisodesWorker, PosterWorker, SearchWorker
 
 PAGE_SIZE = 30
@@ -209,21 +209,11 @@ class MainWindow(QMainWindow):
             combo.addItem(label, value)
         return combo
 
-    @staticmethod
-    def _labeled(text: str, widget: QWidget) -> QWidget:
-        """Wrap a widget with a small leading label (for the filter grid)."""
-        box = QWidget()
-        lay = QHBoxLayout(box)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        label = QLabel(text)
-        label.setObjectName("Muted")
-        lay.addWidget(label)
-        lay.addWidget(widget, 1)
-        return box
-
     def _build_filter_panel(self) -> QWidget:
-        """Collapsible advanced filter (Genere/Tipo/Stato/Stagione/Lingua/Anno)."""
+        """Collapsible advanced filter (Genere/Tipo/Stato/Stagione/Lingua/Anno).
+
+        Each dimension is a multi-select checkbox dropdown, exactly like the site.
+        """
         self.filter_panel = QFrame()
         self.filter_panel.setObjectName("Row")
         self.filter_panel.setVisible(False)
@@ -231,29 +221,23 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(14, 12, 14, 12)
         outer.setSpacing(10)
 
-        self.filter_combos: dict[str, QComboBox] = {}
-        combos: list[tuple[str, QComboBox]] = []
-        for key, label, options in FILTER_FIELDS:
-            combo = self._make_combo(options)
-            self.filter_combos[key] = combo
-            combos.append((label, combo))
-
-        year_combo = QComboBox()
-        year_combo.addItem("Ogni anno", "")
-        for year in range(date.today().year + 1, 1959, -1):
-            year_combo.addItem(str(year), str(year))
-        self.filter_combos["year"] = year_combo
-        combos.append(("Anno", year_combo))
+        self.filter_combos: dict[str, MultiSelectDropdown] = {}
+        fields: list[tuple[str, str, dict]] = list(FILTER_FIELDS)
+        years = {str(y): str(y) for y in range(date.today().year + 1, 1959, -1)}
+        fields.append(("year", "Anno", years))
 
         # Lay the six dropdowns out three per row.
         row: QHBoxLayout | None = None
-        for i, (label, combo) in enumerate(combos):
+        for i, (key, label, options) in enumerate(fields):
+            dropdown = MultiSelectDropdown(label, options)
+            dropdown.changed.connect(self._update_filter_toggle_text)
+            self.filter_combos[key] = dropdown
             if i % 3 == 0:
                 row = QHBoxLayout()
                 row.setSpacing(14)
                 outer.addLayout(row)
-            row.addWidget(self._labeled(label, combo), 1)
-        for _ in range((-len(combos)) % 3):  # pad the last row for even widths
+            row.addWidget(dropdown, 1)
+        for _ in range((-len(fields)) % 3):  # pad the last row for even widths
             row.addStretch(1)
 
         buttons = QHBoxLayout()
@@ -438,21 +422,28 @@ class MainWindow(QMainWindow):
     # Search / browse
     # ------------------------------------------------------------------ #
     def _toggle_filters(self) -> None:
-        show = self.filter_toggle.isChecked()
-        self.filter_panel.setVisible(show)
-        self.filter_toggle.setText("🎛  Filtri  ▴" if show else "🎛  Filtri  ▾")
+        self.filter_panel.setVisible(self.filter_toggle.isChecked())
+        self._update_filter_toggle_text()
+
+    def _update_filter_toggle_text(self) -> None:
+        """Keep the 'Filtri' button showing the active-filter count and open state."""
+        active = sum(1 for dropdown in self.filter_combos.values() if dropdown.values())
+        badge = f"  ({active})" if active else ""
+        arrow = "▴" if self.filter_panel.isVisible() else "▾"
+        self.filter_toggle.setText(f"🎛  Filtri{badge}  {arrow}")
 
     def _current_filters(self) -> dict:
-        """Return the non-empty advanced-filter selections as a client filters dict."""
+        """Return the non-empty advanced-filter selections (dimension -> [values])."""
         return {
-            key: combo.currentData()
-            for key, combo in self.filter_combos.items()
-            if combo.currentData()
+            key: dropdown.values()
+            for key, dropdown in self.filter_combos.items()
+            if dropdown.values()
         }
 
     def _reset_filters(self) -> None:
-        for combo in self.filter_combos.values():
-            combo.setCurrentIndex(0)
+        for dropdown in self.filter_combos.values():
+            dropdown.clear()
+        self._update_filter_toggle_text()
         self._run_query()
 
     def _run_query(self) -> None:
@@ -467,8 +458,9 @@ class MainWindow(QMainWindow):
     def _browse(self, value: str) -> None:
         """Quick-view chip: clear the search box and advanced filters, then run."""
         self.search_input.clear()
-        for combo in self.filter_combos.values():
-            combo.setCurrentIndex(0)
+        for dropdown in self.filter_combos.values():
+            dropdown.clear()
+        self._update_filter_toggle_text()
         # Reflect the value in the sort combo when it is one of the sort options.
         for i in range(self.order_combo.count()):
             if self.order_combo.itemData(i) == value:

@@ -20,9 +20,9 @@
 
 - 🔎 **Ricerca** anime per titolo, collegata direttamente al sito.
 - 🗂️ **Navigazione** come sul sito: *Archivio*, *Anime in corso*, *Ultimi aggiunti*.
-- 🎛️ **Filtro avanzato**: per **genere**, **tipo** (Serie TV / Film / OVA / Special /
-  ONA), **stato**, **stagione**, **lingua** e **anno**, con **ordinamento**
-  (rilevanza, ultime aggiunte, A–Z, Z–A, meno recenti).
+- 🎛️ **Filtro avanzato a selezione multipla** (come sul sito): combina più **generi**,
+  **tipi** (Serie TV / Film / OVA / Special / ONA), **stati**, **stagioni**, **lingue**
+  e **anni**, con **ordinamento** (rilevanza, ultime aggiunte, A–Z, Z–A, meno recenti).
 - 🇮🇹 Filtro **Sub/Dub**: tutti, solo **doppiati (ITA)** o solo **sottotitolati**.
 - 📺 Scheda anime con **trama, copertina e lista episodi**.
 - ✅ Selezione episodi: **singoli**, **tutti** o **intervallo** (es. dal 5 al 12).
