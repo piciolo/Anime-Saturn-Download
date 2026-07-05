@@ -1,0 +1,41 @@
+"""Entry point for the AnimeSaturn Downloader desktop application.
+
+Double-click the packaged executable (or run ``python app.py``) to open the GUI.
+No command-line arguments are required.
+"""
+
+from __future__ import annotations
+
+import sys
+
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication
+
+from gui.main_window import create_window
+from gui.theme import APP_QSS, build_palette
+
+
+def main() -> int:
+    app = QApplication(sys.argv)
+    app.setApplicationName("AnimeSaturn Downloader")
+    app.setOrganizationName("AnimeSaturnDownloader")
+    app.setStyle("Fusion")
+    # Dark palette first so every widget defaults to the dark background, then the
+    # stylesheet layers the accent styling on top.
+    app.setPalette(build_palette())
+    app.setStyleSheet(APP_QSS)
+
+    # Use the bundled logo as the window/taskbar icon when available.
+    from pathlib import Path
+
+    logo = Path(__file__).resolve().parent / "assets" / "logo.png"
+    if logo.exists():
+        app.setWindowIcon(QIcon(str(logo)))
+
+    window = create_window()
+    window.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
