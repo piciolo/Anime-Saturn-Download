@@ -6,10 +6,12 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
+from datetime import date
+
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -28,7 +30,18 @@ from PySide6.QtWidgets import (
 
 from .flowlayout import FlowLayout
 from .models import Anime, Episode
-from .net import SORT_OPTIONS, AnimeSaturnClient, episode_status, sanitize_name
+from .net import (
+    DUB_OPTIONS,
+    GENRE_OPTIONS,
+    LANGUAGE_OPTIONS,
+    SEASON_OPTIONS,
+    SORT_OPTIONS,
+    STATE_OPTIONS,
+    TYPE_OPTIONS,
+    AnimeSaturnClient,
+    episode_status,
+    sanitize_name,
+)
 from .settings import MAX_CONCURRENCY, AppSettings
 from .theme import APP_QSS, GOOD, WARN
 from .widgets import AnimeCard, DownloadRow
@@ -36,12 +49,22 @@ from .workers import DownloadTask, EpisodesWorker, PosterWorker, SearchWorker
 
 PAGE_SIZE = 30
 
-# Quick-browse chips: the first two hit dedicated listing endpoints, "Catalogo" the
-# full /filter archive in the default order.
+# Top navigation chips. The first three are quick views; "Filtri" toggles the advanced
+# filter panel. Values map to a sort/browse endpoint used by the client.
 BROWSE_CHIPS = (
+    ("📚 Archivio", "standard"),
     ("🔥 In corso", "ongoing"),
     ("🆕 Ultimi aggiunti", "newest"),
-    ("📚 Catalogo", "standard"),
+)
+
+# Advanced filter dropdowns: (state key, label, options mapping). The state key matches
+# the client's ``filters`` dict keys (mapped to the site's query params in net.py).
+FILTER_FIELDS = (
+    ("category", "Genere", GENRE_OPTIONS),
+    ("type", "Tipo", TYPE_OPTIONS),
+    ("state", "Stato", STATE_OPTIONS),
+    ("season", "Stagione", SEASON_OPTIONS),
+    ("language", "Lingua", LANGUAGE_OPTIONS),
 )
 
 
@@ -70,7 +93,9 @@ class MainWindow(QMainWindow):
         # Query + task state
         self._search_token = 0
         self._append_next = False
-        self._query: dict = {"title": "", "sort": "standard", "dubbed": False, "page": 1}
+        self._query: dict = {
+            "title": "", "sort": "standard", "dub": "", "filters": {}, "page": 1,
+        }
         self._result_count = 0
         self._detail_anime: Anime | None = None
         self._tasks: dict[int, DownloadTask] = {}
@@ -143,24 +168,21 @@ class MainWindow(QMainWindow):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Cerca un anime…  (es. Naruto, One Piece)")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.returnPressed.connect(self._on_search_clicked)
+        self.search_input.returnPressed.connect(self._run_query)
         search_row.addWidget(self.search_input, 1)
 
-        self.order_combo = QComboBox()
-        for label in SORT_OPTIONS:
-            self.order_combo.addItem(label)
+        self.order_combo = self._make_combo(SORT_OPTIONS)
         search_row.addWidget(self.order_combo)
-
-        self.dub_check = QCheckBox("Solo DUB (ITA)")
-        search_row.addWidget(self.dub_check)
+        self.dub_combo = self._make_combo(DUB_OPTIONS)
+        search_row.addWidget(self.dub_combo)
 
         search_button = QPushButton("Cerca")
         search_button.setObjectName("Primary")
-        search_button.clicked.connect(self._on_search_clicked)
+        search_button.clicked.connect(self._run_query)
         search_row.addWidget(search_button)
         box.addLayout(search_row)
 
-        # Quick browse chips
+        # Navigation chips + advanced-filter toggle
         chips = QHBoxLayout()
         chips.setSpacing(8)
         chips.addWidget(QLabel("Sfoglia:"))
@@ -170,8 +192,82 @@ class MainWindow(QMainWindow):
             chip.clicked.connect(lambda _=False, v=value: self._browse(v))
             chips.addWidget(chip)
         chips.addStretch(1)
+        self.filter_toggle = QPushButton("🎛  Filtri  ▾")
+        self.filter_toggle.setObjectName("Ghost")
+        self.filter_toggle.setCheckable(True)
+        self.filter_toggle.clicked.connect(self._toggle_filters)
+        chips.addWidget(self.filter_toggle)
         box.addLayout(chips)
+
+        box.addWidget(self._build_filter_panel())
         return box
+
+    def _make_combo(self, options: dict) -> QComboBox:
+        """Return a combo whose items carry their filter value as item data."""
+        combo = QComboBox()
+        for label, value in options.items():
+            combo.addItem(label, value)
+        return combo
+
+    @staticmethod
+    def _labeled(text: str, widget: QWidget) -> QWidget:
+        """Wrap a widget with a small leading label (for the filter grid)."""
+        box = QWidget()
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        label = QLabel(text)
+        label.setObjectName("Muted")
+        lay.addWidget(label)
+        lay.addWidget(widget, 1)
+        return box
+
+    def _build_filter_panel(self) -> QWidget:
+        """Collapsible advanced filter (Genere/Tipo/Stato/Stagione/Lingua/Anno)."""
+        self.filter_panel = QFrame()
+        self.filter_panel.setObjectName("Row")
+        self.filter_panel.setVisible(False)
+        outer = QVBoxLayout(self.filter_panel)
+        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setSpacing(10)
+
+        self.filter_combos: dict[str, QComboBox] = {}
+        combos: list[tuple[str, QComboBox]] = []
+        for key, label, options in FILTER_FIELDS:
+            combo = self._make_combo(options)
+            self.filter_combos[key] = combo
+            combos.append((label, combo))
+
+        year_combo = QComboBox()
+        year_combo.addItem("Ogni anno", "")
+        for year in range(date.today().year + 1, 1959, -1):
+            year_combo.addItem(str(year), str(year))
+        self.filter_combos["year"] = year_combo
+        combos.append(("Anno", year_combo))
+
+        # Lay the six dropdowns out three per row.
+        row: QHBoxLayout | None = None
+        for i, (label, combo) in enumerate(combos):
+            if i % 3 == 0:
+                row = QHBoxLayout()
+                row.setSpacing(14)
+                outer.addLayout(row)
+            row.addWidget(self._labeled(label, combo), 1)
+        for _ in range((-len(combos)) % 3):  # pad the last row for even widths
+            row.addStretch(1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        reset_btn = QPushButton("Azzera filtri")
+        reset_btn.setObjectName("Ghost")
+        reset_btn.clicked.connect(self._reset_filters)
+        buttons.addWidget(reset_btn)
+        apply_btn = QPushButton("Applica filtri")
+        apply_btn.setObjectName("Primary")
+        apply_btn.clicked.connect(self._run_query)
+        buttons.addWidget(apply_btn)
+        outer.addLayout(buttons)
+        return self.filter_panel
 
     def _build_catalog_tab(self) -> QWidget:
         self.catalog_stack = QStackedWidget()
@@ -341,25 +437,54 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     # Search / browse
     # ------------------------------------------------------------------ #
-    def _on_search_clicked(self) -> None:
-        title = self.search_input.text().strip()
-        sort = SORT_OPTIONS[self.order_combo.currentText()]
-        self._start_query(title=title, sort=sort, dubbed=self.dub_check.isChecked())
+    def _toggle_filters(self) -> None:
+        show = self.filter_toggle.isChecked()
+        self.filter_panel.setVisible(show)
+        self.filter_toggle.setText("🎛  Filtri  ▴" if show else "🎛  Filtri  ▾")
 
-    def _browse(self, sort_value: str) -> None:
+    def _current_filters(self) -> dict:
+        """Return the non-empty advanced-filter selections as a client filters dict."""
+        return {
+            key: combo.currentData()
+            for key, combo in self.filter_combos.items()
+            if combo.currentData()
+        }
+
+    def _reset_filters(self) -> None:
+        for combo in self.filter_combos.values():
+            combo.setCurrentIndex(0)
+        self._run_query()
+
+    def _run_query(self) -> None:
+        """Gather the search box + sort/dub + advanced filters and run the query."""
+        self._start_query(
+            title=self.search_input.text().strip(),
+            sort=self.order_combo.currentData(),
+            dub=self.dub_combo.currentData(),
+            filters=self._current_filters(),
+        )
+
+    def _browse(self, value: str) -> None:
+        """Quick-view chip: clear the search box and advanced filters, then run."""
         self.search_input.clear()
-        # Reflect the browse order in the combo when it is one of the combo sorts.
-        for label, value in SORT_OPTIONS.items():
-            if value == sort_value:
-                self.order_combo.setCurrentText(label)
+        for combo in self.filter_combos.values():
+            combo.setCurrentIndex(0)
+        # Reflect the value in the sort combo when it is one of the sort options.
+        for i in range(self.order_combo.count()):
+            if self.order_combo.itemData(i) == value:
+                self.order_combo.setCurrentIndex(i)
                 break
-        self._start_query(title="", sort=sort_value, dubbed=self.dub_check.isChecked())
+        self._start_query(
+            title="", sort=value, dub=self.dub_combo.currentData(), filters={}
+        )
 
-    def _start_query(self, *, title: str, sort: str, dubbed: bool) -> None:
+    def _start_query(self, *, title: str, sort: str, dub: str, filters: dict) -> None:
         self.catalog_stack.setCurrentIndex(0)
         self._search_token += 1
         self._append_next = False
-        self._query = {"title": title, "sort": sort, "dubbed": dubbed, "page": 1}
+        self._query = {
+            "title": title, "sort": sort, "dub": dub, "filters": filters, "page": 1,
+        }
         self._result_count = 0
         _clear_layout(self.grid)
         self.load_more_button.setVisible(False)
@@ -380,7 +505,8 @@ class MainWindow(QMainWindow):
             title=self._query["title"] or None,
             sort=self._query["sort"],
             page=self._query["page"],
-            dubbed=self._query["dubbed"],
+            dub=self._query["dub"],
+            filters=self._query["filters"],
         )
         worker.signals.results.connect(self._on_search_results)
         worker.signals.error.connect(self._on_search_error)

@@ -42,12 +42,111 @@ SORT_OPTIONS: dict[str, str] = {
     "Rilevanza": "standard",
     "Ultime aggiunte": "recent",
     "Nome (A–Z)": "az",
+    "Nome (Z–A)": "za",
+    "Meno recenti": "oldest",
 }
 
 # Browse chips that hit a dedicated listing endpoint instead of /filter.
 BROWSE_ENDPOINTS: dict[str, str] = {
     "ongoing": "/ongoing",
     "newest": "/newest",
+}
+
+# --- Advanced filter dimensions (label -> /filter value; "" = no constraint) --- #
+# These mirror the site's own filter panel (label:value pairs scraped from /filter).
+DUB_OPTIONS: dict[str, str] = {
+    "Sub e Dub": "",
+    "Solo doppiati (ITA)": "1",
+    "Solo sottotitolati": "0",
+}
+TYPE_OPTIONS: dict[str, str] = {
+    "Tutti i tipi": "",
+    "Serie TV": "1",
+    "Film": "2",
+    "OVA": "3",
+    "Special": "4",
+    "ONA": "5",
+}
+STATE_OPTIONS: dict[str, str] = {
+    "Qualsiasi stato": "",
+    "In corso": "0",
+    "Finito": "1",
+    "Non rilasciato": "2",
+    "Droppato": "3",
+}
+SEASON_OPTIONS: dict[str, str] = {
+    "Ogni stagione": "",
+    "Primavera": "spring",
+    "Estate": "summer",
+    "Autunno": "fall",
+    "Inverno": "winter",
+}
+LANGUAGE_OPTIONS: dict[str, str] = {
+    "Ogni lingua": "",
+    "Giapponese": "jp",
+    "Italiano": "it",
+    "Inglese": "en",
+    "Coreano": "kr",
+    "Cinese": "ch",
+}
+# Genres (label -> categories id). Full list as published on /genres.
+GENRE_OPTIONS: dict[str, str] = {
+    "Tutti i generi": "",
+    "Arti Marziali": "3",
+    "Avanguardia": "5",
+    "Avventura": "2",
+    "Azione": "1",
+    "Bambini": "47",
+    "Commedia": "4",
+    "Demoni": "6",
+    "Drammatico": "7",
+    "Ecchi": "8",
+    "Fantasy": "9",
+    "Gioco": "10",
+    "Harem": "11",
+    "Hentai": "43",
+    "Horror": "13",
+    "Isekai": "49",
+    "Josei": "14",
+    "Magia": "16",
+    "Mecha": "18",
+    "Militari": "19",
+    "Mistero": "21",
+    "Musicale": "20",
+    "Parodia": "22",
+    "Polizia": "23",
+    "Psicologico": "24",
+    "Romantico": "46",
+    "Samurai": "26",
+    "Sci-Fi": "28",
+    "Scolastico": "27",
+    "Seinen": "29",
+    "Sentimentale": "25",
+    "Shoujo": "30",
+    "Shoujo Ai": "31",
+    "Shounen": "32",
+    "Shounen Ai": "33",
+    "Slice of Life": "34",
+    "Soprannaturale": "37",
+    "Spazio": "35",
+    "Sport": "36",
+    "Storico": "12",
+    "Superpoteri": "38",
+    "Thriller": "39",
+    "Vampiri": "40",
+    "Veicoli": "48",
+    "Yaoi": "41",
+    "Yuri": "42",
+}
+
+# The /filter query parameter for each advanced dimension.
+FILTER_PARAMS: dict[str, str] = {
+    "category": "categories",
+    "type": "types",
+    "state": "states",
+    "season": "seasons",
+    "language": "languages",
+    "year": "years",
 }
 
 _FIREFOX_UA = (
@@ -143,35 +242,44 @@ class AnimeSaturnClient:
         *,
         sort: str = "standard",
         page: int = 1,
-        dubbed: bool = False,
+        dub: str = "",
+        filters: dict[str, str] | None = None,
     ) -> list[dict]:
-        """Return the parsed catalogue cards for a search or browse query.
+        """Return the parsed catalogue cards for a search / browse / filter query.
 
-        A non-empty ``title`` searches via ``/filter?key=…``. With no title, ``sort``
-        may name a browse endpoint (``ongoing``/``newest``) or a ``/filter`` sort
-        (``standard``/``recent``/``az``). ``dubbed`` keeps only ITA-dubbed entries
-        (native ``&dub=1`` on ``/filter``; a client-side filter on browse endpoints).
+        - a non-empty ``title`` searches via ``/filter?key=…``;
+        - with no title and no filters, ``sort`` may name a browse endpoint
+          (``ongoing``/``newest``);
+        - otherwise it is a ``/filter`` query combining ``sort``, ``dub`` (``"1"``
+          doppiati / ``"0"`` sottotitolati) and any advanced ``filters`` (keys
+          ``category``/``type``/``state``/``season``/``language``/``year``, mapped to
+          the site's plural query params).
         """
         page = max(page, 1)
-        client_side_dub = False
+        filters = {k: v for k, v in (filters or {}).items() if v}
+        client_side_dub = ""
 
-        if not title and sort in BROWSE_ENDPOINTS:
+        if not title and not filters and sort in BROWSE_ENDPOINTS:
             url = f"{self.base_url}{BROWSE_ENDPOINTS[sort]}"
-            params = {"page": page}
-            client_side_dub = dubbed  # these endpoints ignore &dub
+            params: dict[str, object] = {"page": page}
+            client_side_dub = dub  # these endpoints ignore &dub
         else:
             url = f"{self.base_url}/filter"
             params = {"sort": sort or "standard", "page": page}
             if title:
                 params["key"] = title
-            if dubbed:
-                params["dub"] = 1
+            if dub:
+                params["dub"] = dub
+            for key, value in filters.items():
+                params[FILTER_PARAMS.get(key, key)] = value
 
         response = self._client.get(url, params=params, headers=_HTML_HEADERS)
         response.raise_for_status()
         cards = self._parse_cards(response.text)
-        if client_side_dub:
+        if client_side_dub == "1":
             cards = [c for c in cards if c.get("dubbed")]
+        elif client_side_dub == "0":
+            cards = [c for c in cards if not c.get("dubbed")]
         return cards
 
     @staticmethod

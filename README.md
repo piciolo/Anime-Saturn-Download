@@ -19,9 +19,11 @@
 ## ✨ Caratteristiche
 
 - 🔎 **Ricerca** anime per titolo, collegata direttamente al sito.
-- 🔥 **Sfoglia** il catalogo: *In corso*, *Ultimi aggiunti*, *Catalogo* — con
-  ordinamento (rilevanza, ultime aggiunte, A–Z).
-- 🇮🇹 Filtro **DUB (ITA)** per i soli anime doppiati in italiano.
+- 🗂️ **Navigazione** come sul sito: *Archivio*, *Anime in corso*, *Ultimi aggiunti*.
+- 🎛️ **Filtro avanzato**: per **genere**, **tipo** (Serie TV / Film / OVA / Special /
+  ONA), **stato**, **stagione**, **lingua** e **anno**, con **ordinamento**
+  (rilevanza, ultime aggiunte, A–Z, Z–A, meno recenti).
+- 🇮🇹 Filtro **Sub/Dub**: tutti, solo **doppiati (ITA)** o solo **sottotitolati**.
 - 📺 Scheda anime con **trama, copertina e lista episodi**.
 - ✅ Selezione episodi: **singoli**, **tutti** o **intervallo** (es. dal 5 al 12).
 - 📥 **Coda di download** con barra di avanzamento, velocità, download **simultanei**
@@ -59,7 +61,8 @@ python app.py
 
 1. All'avvio vedi già gli anime **In corso**.
 2. Scrivi un titolo nella barra e premi **Invio** (o **Cerca**). Puoi cambiare
-   l'ordinamento e attivare **Solo DUB (ITA)**.
+   l'ordinamento e il **Sub/Dub**, oppure aprire **🎛 Filtri** per filtrare per
+   **genere, tipo, stato, stagione, lingua e anno**.
 3. Clicca su una copertina per aprire la **scheda dell'anime**.
 4. Spunta gli episodi desiderati. Per fare presto usa **Seleziona tutti** oppure imposta
    **Dal … al …** e premi **Seleziona intervallo**.

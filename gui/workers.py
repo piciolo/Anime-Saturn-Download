@@ -32,7 +32,8 @@ class SearchWorker(QRunnable):
         title: str | None,
         sort: str,
         page: int,
-        dubbed: bool,
+        dub: str,
+        filters: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self.client = client
@@ -40,7 +41,8 @@ class SearchWorker(QRunnable):
         self.title = title
         self.sort = sort
         self.page = page
-        self.dubbed = dubbed
+        self.dub = dub
+        self.filters = filters
         self.signals = SearchSignals()
 
     def run(self) -> None:
@@ -49,7 +51,8 @@ class SearchWorker(QRunnable):
                 self.title,
                 sort=self.sort,
                 page=self.page,
-                dubbed=self.dubbed,
+                dub=self.dub,
+                filters=self.filters,
             )
             animes = [Anime.from_record(record) for record in records]
             self.signals.results.emit(self.token, animes)
