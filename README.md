@@ -33,6 +33,16 @@
 
 ## ⬇️ Installazione e avvio
 
+### Modo più semplice — eseguibile (consigliato)
+
+1. Vai alla pagina **[Releases](https://github.com/piciolo/Anime-Saturn-Download/releases/latest)**
+   e scarica il file `.exe`.
+2. **Doppio clic**. Fine: non serve installare Python.
+
+> Essendo un eseguibile non firmato, Windows SmartScreen potrebbe mostrare un avviso:
+> clicca **Ulteriori informazioni → Esegui comunque**. Al primo avvio l'app impiega
+> qualche secondo a partire.
+
 ### Avvio con doppio clic (dal codice)
 
 Fai doppio clic su **`Avvia AnimeSaturn.bat`** (avvia l'app senza finestra del
