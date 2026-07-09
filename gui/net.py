@@ -319,6 +319,53 @@ class AnimeSaturnClient:
             )
         return cards
 
+    def suggest(self, query: str) -> list[dict]:
+        """Return live search-as-you-type suggestions for ``query``.
+
+        Uses the site's lightweight JSON endpoint ``/api/search?q=…`` (up to ~10 hits).
+        Each suggestion carries enough to open the anime directly (slug, poster, type,
+        year, episode count) without a second request.
+        """
+        query = (query or "").strip()
+        if len(query) < 2:
+            return []
+        response = self._client.get(
+            f"{self.base_url}/api/search",
+            params={"q": query},
+            headers={
+                "User-Agent": _FIREFOX_UA,
+                "Accept": "application/json, text/plain, */*",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": f"{self.base_url}/",
+            },
+        )
+        response.raise_for_status()
+        results = response.json().get("results") or []
+        # The endpoint pads short queries to 10 hits with unrelated titles; keep only
+        # entries that actually contain every typed word so suggestions stay relevant.
+        tokens = query.lower().split()
+        suggestions: list[dict] = []
+        for record in results:
+            title = (record.get("title") or "").strip()
+            url = record.get("url") or ""
+            slug = url.rsplit("/anime/", 1)[-1].strip("/") if "/anime/" in url else ""
+            if not title or not slug:
+                continue
+            if not all(token in title.lower() for token in tokens):
+                continue
+            suggestions.append(
+                {
+                    "title": title,
+                    "slug": slug,
+                    "poster": record.get("poster") or "",
+                    "type": record.get("type") or "",
+                    "year": str(record.get("year") or ""),
+                    "episodes_count": _to_int(record.get("episodes"), 0),
+                    "dubbed": "(ITA)" in title,
+                }
+            )
+        return suggestions
+
     # ------------------------------------------------------------------ #
     # Anime detail + episodes
     # ------------------------------------------------------------------ #

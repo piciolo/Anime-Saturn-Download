@@ -105,6 +105,28 @@ class PosterWorker(QRunnable):
             self.signals.error.emit(self.url)
 
 
+class SuggestSignals(QObject):
+    results = Signal(object, list)  # token, list[dict]
+    error = Signal(object, str)
+
+
+class SuggestWorker(QRunnable):
+    """Fetch search-as-you-type suggestions off the UI thread (debounced by caller)."""
+
+    def __init__(self, client: AnimeSaturnClient, token: object, query: str) -> None:
+        super().__init__()
+        self.client = client
+        self.token = token
+        self.query = query
+        self.signals = SuggestSignals()
+
+    def run(self) -> None:
+        try:
+            self.signals.results.emit(self.token, self.client.suggest(self.query))
+        except Exception as exc:  # noqa: BLE001 - suggestions are best-effort
+            self.signals.error.emit(self.token, str(exc))
+
+
 class ResolveSignals(QObject):
     done = Signal(object, str)   # token, media_url
     error = Signal(object, str)  # token, message

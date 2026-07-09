@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtCore import Qt, QStringListModel, QThreadPool, QTimer
 from PySide6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
 from datetime import date
 
 from PySide6.QtWidgets import (
     QComboBox,
+    QCompleter,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -46,7 +47,13 @@ from .settings import MAX_CONCURRENCY, AppSettings
 from .theme import APP_QSS, GOOD, WARN
 from .player import PlayerWindow
 from .widgets import AnimeCard, DownloadRow, MultiSelectDropdown
-from .workers import DownloadTask, EpisodesWorker, PosterWorker, SearchWorker
+from .workers import (
+    DownloadTask,
+    EpisodesWorker,
+    PosterWorker,
+    SearchWorker,
+    SuggestWorker,
+)
 
 PAGE_SIZE = 30
 
@@ -103,6 +110,8 @@ class MainWindow(QMainWindow):
         self._rows: dict[int, DownloadRow] = {}
         self._task_counter = 0
         self._players: set = set()
+        self._suggest_token = 0
+        self._suggest_map: dict[str, dict] = {}
 
         self.setWindowTitle("AnimeSaturn Downloader")
         self.resize(1180, 820)
@@ -171,6 +180,20 @@ class MainWindow(QMainWindow):
         self.search_input.setPlaceholderText("Cerca un anime…  (es. Naruto, One Piece)")
         self.search_input.setClearButtonEnabled(True)
         self.search_input.returnPressed.connect(self._run_query)
+        # Search-as-you-type suggestions (debounced live search via /api/search).
+        self.search_input.textEdited.connect(self._on_search_text_edited)
+        self._suggest_timer = QTimer(self)
+        self._suggest_timer.setSingleShot(True)
+        self._suggest_timer.setInterval(180)
+        self._suggest_timer.timeout.connect(self._fetch_suggestions)
+        self._suggest_model = QStringListModel(self)
+        self.completer = QCompleter(self._suggest_model, self)
+        self.completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
+        self.completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self.completer.setMaxVisibleItems(10)
+        self.completer.activated[str].connect(self._on_suggestion_chosen)
+        self.search_input.setCompleter(self.completer)
+        self.completer.popup().setObjectName("SuggestPopup")
         search_row.addWidget(self.search_input, 1)
 
         self.order_combo = self._make_combo(SORT_OPTIONS)
@@ -445,6 +468,64 @@ class MainWindow(QMainWindow):
         badge = f"  ({active})" if active else ""
         arrow = "▴" if self.filter_panel.isVisible() else "▾"
         self.filter_toggle.setText(f"🎛  Filtri{badge}  {arrow}")
+
+    # ------------------------------------------------------------------ #
+    # Search-as-you-type suggestions
+    # ------------------------------------------------------------------ #
+    def _on_search_text_edited(self, text: str) -> None:
+        if len(text.strip()) < 2:
+            self._suggest_timer.stop()
+            self._suggest_model.setStringList([])
+        else:
+            self._suggest_timer.start()  # (re)start the debounce window
+
+    def _fetch_suggestions(self) -> None:
+        query = self.search_input.text().strip()
+        if len(query) < 2:
+            return
+        self._suggest_token += 1
+        worker = SuggestWorker(self.client, self._suggest_token, query)
+        worker.signals.results.connect(self._on_suggestions)
+        self.io_pool.start(worker)
+
+    def _on_suggestions(self, token: object, results: list) -> None:
+        if token != self._suggest_token or not self.search_input.hasFocus():
+            return
+        self._suggest_map = {}
+        titles: list[str] = []
+        for record in results:
+            title = record["title"]
+            if title in self._suggest_map:  # disambiguate rare duplicate titles
+                year = record["year"]
+                title = f"{title}  ·  {year}" if year else f"{title} ({record['slug']})"
+            self._suggest_map[title] = record
+            titles.append(title)
+        self._suggest_model.setStringList(titles)
+        if titles:
+            self.completer.complete()
+        else:
+            self.completer.popup().hide()
+
+    def _on_suggestion_chosen(self, title: str) -> None:
+        record = self._suggest_map.get(title)
+        if not record:
+            return
+        self._suggest_timer.stop()
+        self.search_input.setText(record["title"])
+        # The suggestion already carries everything the detail header needs, so open it
+        # straight away (plot/episodes are then loaded from the anime page as usual).
+        self._open_detail(
+            Anime(
+                slug=record["slug"],
+                title=record["title"],
+                poster=record["poster"],
+                anime_type=record["type"],
+                dubbed=record["dubbed"],
+                episodes_count=record["episodes_count"],
+                year=record["year"],
+                score="",
+            )
+        )
 
     def _current_filters(self) -> dict:
         """Return the non-empty advanced-filter selections (dimension -> [values])."""

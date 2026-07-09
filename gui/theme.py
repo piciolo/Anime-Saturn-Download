@@ -63,6 +63,25 @@ QComboBox QAbstractItemView {{
     padding: 4px;
 }}
 
+/* Search-as-you-type suggestions popup */
+QListView#SuggestPopup {{
+    background: {CARD};
+    border: 1px solid {ACCENT};
+    border-radius: 10px;
+    padding: 4px;
+    outline: none;
+}}
+QListView#SuggestPopup::item {{
+    padding: 8px 10px;
+    border-radius: 6px;
+    color: {TEXT};
+}}
+QListView#SuggestPopup::item:hover {{ background: {CARD_HOVER}; }}
+QListView#SuggestPopup::item:selected {{
+    background: rgba(124, 92, 255, 0.22);
+    color: {TEXT};
+}}
+
 /* Multi-select filter dropdowns (button) and their checkbox popups */
 QPushButton#FilterSelect {{
     background: {BG_ALT};

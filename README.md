@@ -23,6 +23,10 @@
 </p>
 
 <p align="center">
+  <img src="assets/screenshot-suggerimenti.png" width="100%" alt="Suggerimenti dei titoli mentre scrivi">
+</p>
+
+<p align="center">
   <img src="assets/screenshot-filtri.png" width="49%" alt="Filtro avanzato a selezione multipla">
   &nbsp;
   <img src="assets/screenshot-episodi.png" width="49%" alt="Scheda anime con lista episodi">
@@ -35,6 +39,8 @@
 ## ✨ Caratteristiche
 
 - 🔎 **Ricerca** anime per titolo, collegata direttamente al sito.
+- 💡 **Suggerimenti mentre scrivi**: la barra propone i titoli man mano che digiti;
+  clicca un suggerimento per aprire **subito** la scheda dell'anime.
 - 🗂️ **Navigazione** come sul sito: *Archivio*, *Anime in corso*, *Ultimi aggiunti*.
 - 🎛️ **Filtro avanzato a selezione multipla** (come sul sito): combina più **generi**,
   **tipi** (Serie TV / Film / OVA / Special / ONA), **stati**, **stagioni**, **lingue**
