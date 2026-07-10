@@ -7,9 +7,9 @@ progress back so the "continue watching" history stays up to date.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QUrl, Signal, QTimer
+from PySide6.QtCore import QObject, Qt, QUrl, Signal, QTimer
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QDialog,
@@ -34,6 +34,118 @@ def _fmt(ms: int) -> str:
     h, rem = divmod(total, 3600)
     m, s = divmod(rem, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+# Skip-intro: show the button in this early window and jump forward a standard OP.
+INTRO_START_MS = 8_000
+INTRO_END_MS = 150_000
+INTRO_SKIP_MS = 85_000
+# End-of-episode overlay window (roughly the ending-credits stretch).
+END_WINDOW_MS = 90_000
+
+
+class TailProbe(QObject):
+    """Best-effort detector for a post-credits "extra" scene.
+
+    Anime have no chapter metadata, so this plays the media muted, samples brightness
+    across the last ~35 s and reports the start of any content that follows a clear
+    near-black gap. It fires only on that strong pattern (fade-to-black → content) to
+    avoid false positives on colourful ending themes / next-episode previews. Emits
+    ``done(extra_start_ms)`` (0 when nothing convincing is found).
+    """
+
+    done = Signal(int)
+
+    def __init__(self, source: QUrl, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._player = QMediaPlayer(self)
+        self._audio = QAudioOutput(self)
+        self._audio.setVolume(0.0)
+        self._player.setAudioOutput(self._audio)
+        self._sink = QVideoSink(self)
+        self._player.setVideoOutput(self._sink)
+        self._sink.videoFrameChanged.connect(self._on_frame)
+        self._player.mediaStatusChanged.connect(self._on_status)
+        self._source = source
+        self._frame = None
+        self._points: list[int] = []
+        self._samples: list[tuple[int, float]] = []
+        self._started = False
+        self._finished = False
+
+    def start(self) -> None:
+        self._player.setSource(self._source)
+        self._player.play()
+        QTimer.singleShot(45_000, self._abort)  # never run forever
+
+    def _on_frame(self, frame) -> None:
+        self._frame = frame
+
+    def _on_status(self, status) -> None:
+        if self._started:
+            return
+        ready = {QMediaPlayer.BufferedMedia, QMediaPlayer.LoadedMedia}
+        if status in ready and self._player.duration() > 0 and self._player.isSeekable():
+            self._started = True
+            dur = self._player.duration()
+            self._points = [dur - t for t in range(35_000, 1_000, -2_000)]
+            QTimer.singleShot(300, self._sample)
+
+    def _sample(self) -> None:
+        if not self._points:
+            self._finish()
+            return
+        self._player.setPosition(int(self._points.pop(0)))
+        QTimer.singleShot(650, self._grab)
+
+    def _grab(self) -> None:
+        self._samples.append((self._player.position(), self._brightness()))
+        self._sample()
+
+    def _brightness(self) -> float:
+        frame = self._frame
+        if not frame or not frame.isValid():
+            return -1.0
+        img = frame.toImage()
+        if img.isNull():
+            return -1.0
+        img = img.scaled(40, 22)
+        total = 0.0
+        count = 0
+        for y in range(0, 22, 2):
+            for x in range(0, 40, 2):
+                col = img.pixelColor(x, y)
+                total += (col.red() + col.green() + col.blue()) / 3
+                count += 1
+        return total / max(count, 1)
+
+    def _finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        dur = self._player.duration()
+        valid = [(p, b) for p, b in self._samples if b >= 0]
+        extra = 0
+        for i, (pos, bright) in enumerate(valid):
+            if bright < 12 and pos < dur - 3_000:  # a genuine fade-to-black gap
+                after = [b for p, b in valid[i + 1:] if p < dur - 1_000]
+                if any(b > 45 for b in after):  # real content follows the gap
+                    extra = int(pos + 1_500)
+        self._teardown()
+        self.done.emit(extra)
+
+    def _abort(self) -> None:
+        if not self._finished:
+            self._finished = True
+            self._teardown()
+            self.done.emit(0)
+
+    def _teardown(self) -> None:
+        try:
+            self._player.stop()
+            self._player.setSource(QUrl())
+        except RuntimeError:
+            pass
 
 
 class PlayerWindow(QDialog):
@@ -71,6 +183,9 @@ class PlayerWindow(QDialog):
         self._seeking = False
         self._resume_ms = max(int(resume_ms), 0)
         self._resumed = False
+        self._extra_start = 0        # post-credits start (ms), 0 = none detected
+        self._overlay_mode = None    # None / "intro" / "next" / "credits"
+        self._probe = None
 
         self.setObjectName("Player")
         where = f"Episodio {episode.number} di {total}" if total else episode.number_label
@@ -131,6 +246,22 @@ class PlayerWindow(QDialog):
             "padding:14px 20px;border-radius:12px;"
         )
         grid.addWidget(self.status, 0, 0, Qt.AlignCenter)
+
+        # Netflix-style overlay button (skip intro / next episode / skip credits).
+        self.overlay_button = QPushButton()
+        self.overlay_button.setObjectName("Overlay")
+        self.overlay_button.setCursor(Qt.PointingHandCursor)
+        self.overlay_button.setStyleSheet(
+            "QPushButton#Overlay{background:rgba(18,19,26,0.82);color:#fff;"
+            "border:1px solid rgba(255,255,255,0.30);border-radius:10px;"
+            "padding:11px 20px;font-size:15px;font-weight:600;margin:0 26px 22px 0;}"
+            "QPushButton#Overlay:hover{background:rgba(124,92,255,0.92);"
+            "border-color:#9179ff;}"
+        )
+        self.overlay_button.clicked.connect(self._overlay_clicked)
+        self.overlay_button.hide()
+        grid.addWidget(self.overlay_button, 0, 0, Qt.AlignRight | Qt.AlignBottom)
+
         layout.addWidget(stage, 1)
 
         # The seek bar + controls live in one container that auto-hides in fullscreen.
@@ -211,6 +342,7 @@ class PlayerWindow(QDialog):
             self._media_url = QUrl.fromLocalFile(self.local_path).toString()
             self.player.setSource(QUrl.fromLocalFile(self.local_path))
             self.player.play()
+            self._start_probe()
             return
         worker = ResolveWorker(self.client, self._token, self.episode.watch_path)
         worker.signals.done.connect(self._on_resolved)
@@ -225,6 +357,7 @@ class PlayerWindow(QDialog):
         self.status.setText("Caricamento…")
         self.player.setSource(QUrl(url))
         self.player.play()
+        self._start_probe()
 
     def _on_resolve_error(self, token: object, message: str) -> None:
         if token is not self._token:
@@ -242,6 +375,9 @@ class PlayerWindow(QDialog):
         self._resumed = False
         self._token = object()
         self._media_url = ""
+        self._extra_start = 0
+        self._overlay_mode = None
+        self.overlay_button.hide()
         where = (
             f"Episodio {episode.number} di {self.total}"
             if self.total
@@ -281,6 +417,67 @@ class PlayerWindow(QDialog):
         self.player.setPosition(self._resume_ms)
 
     # ------------------------------------------------------------------ #
+    # Overlay: skip intro / next episode / skip credits
+    # ------------------------------------------------------------------ #
+    def _has_next(self) -> bool:
+        try:
+            current = int(str(self.episode.number))
+        except (TypeError, ValueError):
+            return False
+        return not self.total or current + 1 <= self.total
+
+    def _update_overlay(self, position: int) -> None:
+        duration = self.player.duration()
+        mode = None
+        if INTRO_START_MS <= position <= INTRO_END_MS:
+            mode = "intro"
+        elif duration > 0 and position >= duration - END_WINDOW_MS:
+            if self._extra_start and position < self._extra_start:
+                mode = "credits"
+            elif self._has_next():
+                mode = "next"
+        if mode == self._overlay_mode:
+            return
+        self._overlay_mode = mode
+        labels = {
+            "intro": "⏭  Salta intro",
+            "next": "▶  Episodio successivo",
+            "credits": "⏭  Salta titoli di coda",
+        }
+        if mode:
+            self.overlay_button.setText(labels[mode])
+            self.overlay_button.show()
+            self.overlay_button.raise_()
+        else:
+            self.overlay_button.hide()
+
+    def _overlay_clicked(self) -> None:
+        mode = self._overlay_mode
+        self.overlay_button.hide()
+        self._overlay_mode = None
+        if mode == "intro":
+            target = min(self.player.position() + INTRO_SKIP_MS, self.player.duration())
+            self.player.setPosition(target)
+        elif mode == "credits":
+            self.player.setPosition(self._extra_start)
+        elif mode == "next":
+            self.ended.emit()  # load the next episode in this window
+
+    def _start_probe(self) -> None:
+        """Kick off the post-credits detector for the current media (best-effort)."""
+        if not self._media_url:
+            return
+        probe = TailProbe(QUrl(self._media_url), self)
+        self._probe = probe
+        token = self._token
+        probe.done.connect(lambda ms, tok=token: self._on_probe(tok, ms))
+        probe.start()
+
+    def _on_probe(self, token, extra_start: int) -> None:
+        if token is self._token and extra_start > 0:
+            self._extra_start = extra_start
+
+    # ------------------------------------------------------------------ #
     # Progress reporting
     # ------------------------------------------------------------------ #
     def _emit_progress(self, *, finished: bool = False) -> None:
@@ -309,6 +506,7 @@ class PlayerWindow(QDialog):
 
     def _on_position(self, position: int) -> None:
         self._maybe_resume()  # keep retrying the resume seek until it lands
+        self._update_overlay(position)
         if not self._seeking:
             self.position_slider.setValue(position)
         self.time_label.setText(f"{_fmt(position)} / {_fmt(self.player.duration())}")
