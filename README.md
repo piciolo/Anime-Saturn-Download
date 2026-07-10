@@ -36,6 +36,10 @@
   <img src="assets/screenshot-player.png" width="82%" alt="Anteprima in streaming integrata">
 </p>
 
+<p align="center">
+  <img src="assets/screenshot-continua.png" width="100%" alt="Continua a guardare: riprendi da dove eri rimasto">
+</p>
+
 ## ✨ Caratteristiche
 
 - 🔎 **Ricerca** anime per titolo, collegata direttamente al sito.
@@ -51,6 +55,11 @@
   play/pausa, avanzamento, volume, schermo intero) per capire se ti piace **prima** di
   scaricarlo — *doppio clic* su un episodio o pulsante **👁 Anteprima**; dal player puoi
   anche scaricarlo con un clic.
+- ⏯️ **Continua a guardare**: l'app ricorda dove eri arrivato — anime, *episodio 2 di 5*
+  e il **minuto** — e **riprende da lì**, sia in streaming sia dai file scaricati; a fine
+  episodio passa automaticamente al successivo.
+- 📁 **Libreria con player interno**: vedi tutti gli episodi che hai **scaricato** e li
+  riproduci nell'app, riprendendo dal punto in cui eri.
 - ✅ Selezione episodi: **singoli**, **tutti** o **intervallo** (es. dal 5 al 12).
 - 📥 **Coda di download** con barra di avanzamento, velocità, download **simultanei**
   regolabili, **annulla** immediato e **cartella personalizzabile**.

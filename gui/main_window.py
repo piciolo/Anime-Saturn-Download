@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QStringListModel, QThreadPool, QTimer
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from .flowlayout import FlowLayout
+from .history import WatchHistory, format_progress
 from .models import Anime, Episode
 from .net import (
     DUB_OPTIONS,
@@ -40,13 +42,14 @@ from .net import (
     STATE_OPTIONS,
     TYPE_OPTIONS,
     AnimeSaturnClient,
+    episode_label,
     episode_status,
     sanitize_name,
 )
 from .settings import MAX_CONCURRENCY, AppSettings
 from .theme import APP_QSS, GOOD, WARN
 from .player import PlayerWindow
-from .widgets import AnimeCard, DownloadRow, MultiSelectDropdown
+from .widgets import AnimeCard, DownloadRow, MultiSelectDropdown, human_size
 from .workers import (
     DownloadTask,
     EpisodesWorker,
@@ -85,6 +88,15 @@ def _clear_layout(layout) -> None:
             widget.deleteLater()
 
 
+def _clear_widgets_keep_stretch(layout) -> None:
+    """Delete every widget in a layout but leave its trailing stretch spacer intact."""
+    for i in reversed(range(layout.count())):
+        widget = layout.itemAt(i).widget()
+        if widget is not None:
+            layout.takeAt(i)
+            widget.deleteLater()
+
+
 class MainWindow(QMainWindow):
     """Top-level window."""
 
@@ -112,6 +124,9 @@ class MainWindow(QMainWindow):
         self._players: set = set()
         self._suggest_token = 0
         self._suggest_map: dict[str, dict] = {}
+        self._detail_total = 0
+        self._poster_workers: set = set()
+        self.history = WatchHistory()
 
         self.setWindowTitle("AnimeSaturn Downloader")
         self.resize(1180, 820)
@@ -136,7 +151,16 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_catalog_tab(), "Catalogo")
-        self.tabs.addTab(self._build_downloads_tab(), "Download")
+        self._continue_tab_index = self.tabs.addTab(
+            self._build_continue_tab(), "▶  Continua"
+        )
+        self._library_tab_index = self.tabs.addTab(
+            self._build_library_tab(), "📁  Libreria"
+        )
+        self._downloads_tab_index = self.tabs.addTab(
+            self._build_downloads_tab(), "Download"
+        )
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, 1)
 
         # Press Esc to go back from an anime detail to the results.
@@ -456,6 +480,306 @@ class MainWindow(QMainWindow):
         return page
 
     # ------------------------------------------------------------------ #
+    # Continue watching + Library tabs
+    # ------------------------------------------------------------------ #
+    def _build_continue_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(10)
+
+        bar = QHBoxLayout()
+        heading = QLabel("Riprendi da dove eri rimasto")
+        heading.setObjectName("SectionTitle")
+        bar.addWidget(heading)
+        bar.addStretch(1)
+        clear = QPushButton("Svuota cronologia")
+        clear.setObjectName("Ghost")
+        clear.clicked.connect(self._clear_history)
+        bar.addWidget(clear)
+        layout.addLayout(bar)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        self.continue_layout = QVBoxLayout(container)
+        self.continue_layout.setContentsMargins(2, 2, 2, 2)
+        self.continue_layout.setSpacing(10)
+        self.continue_layout.addStretch(1)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
+        self.continue_empty = QLabel(
+            "Non stai guardando nulla. Apri un episodio in anteprima o riproduci un "
+            "download: comparirà qui, pronto da riprendere."
+        )
+        self.continue_empty.setObjectName("Muted")
+        self.continue_empty.setAlignment(Qt.AlignCenter)
+        self.continue_empty.setWordWrap(True)
+        layout.addWidget(self.continue_empty)
+        return page
+
+    def _build_library_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(10)
+
+        bar = QHBoxLayout()
+        heading = QLabel("I tuoi anime scaricati")
+        heading.setObjectName("SectionTitle")
+        bar.addWidget(heading)
+        bar.addStretch(1)
+        refresh = QPushButton("Aggiorna")
+        refresh.setObjectName("Ghost")
+        refresh.clicked.connect(self._refresh_library)
+        bar.addWidget(refresh)
+        open_folder = QPushButton("Apri cartella")
+        open_folder.setObjectName("Ghost")
+        open_folder.clicked.connect(self._open_download_folder)
+        bar.addWidget(open_folder)
+        layout.addLayout(bar)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        self.library_layout = QVBoxLayout(container)
+        self.library_layout.setContentsMargins(2, 2, 2, 2)
+        self.library_layout.setSpacing(12)
+        self.library_layout.addStretch(1)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
+        self.library_empty = QLabel(
+            "Nessun file scaricato. Scarica qualche episodio e comparirà qui, pronto "
+            "da riprodurre nel player interno."
+        )
+        self.library_empty.setObjectName("Muted")
+        self.library_empty.setAlignment(Qt.AlignCenter)
+        self.library_empty.setWordWrap(True)
+        layout.addWidget(self.library_empty)
+        return page
+
+    def _on_tab_changed(self, index: int) -> None:
+        if index == self._continue_tab_index:
+            self._refresh_continue()
+        elif index == self._library_tab_index:
+            self._refresh_library()
+
+    def _refresh_watch_views(self) -> None:
+        current = self.tabs.currentIndex()
+        if current == self._continue_tab_index:
+            self._refresh_continue()
+        elif current == self._library_tab_index:
+            self._refresh_library()
+
+    def _clear_history(self) -> None:
+        self.history.clear()
+        self._refresh_continue()
+
+    def _open_download_folder(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        Path(self.settings.download_dir).mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(self.settings.download_dir))
+
+    # --- Continue watching --- #
+    def _refresh_continue(self) -> None:
+        _clear_widgets_keep_stretch(self.continue_layout)
+        entries = self.history.recent(40)
+        for entry in entries:
+            self.continue_layout.insertWidget(
+                self.continue_layout.count() - 1, self._continue_row(entry)
+            )
+        self.continue_empty.setVisible(not entries)
+
+    def _continue_row(self, entry: dict) -> QWidget:
+        row = QFrame()
+        row.setObjectName("Row")
+        outer = QHBoxLayout(row)
+        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setSpacing(12)
+
+        thumb = QLabel("🎬")
+        thumb.setFixedSize(64, 90)
+        thumb.setAlignment(Qt.AlignCenter)
+        thumb.setStyleSheet("background:#15161f;border-radius:8px;color:#5b6079;")
+        self._load_thumb(thumb, entry.get("poster", ""))
+        outer.addWidget(thumb)
+
+        info = QVBoxLayout()
+        info.setSpacing(4)
+        name = QLabel(entry.get("title", "?"))
+        name.setStyleSheet("font-weight:600;")
+        name.setWordWrap(True)
+        info.addWidget(name)
+        progress = QLabel(format_progress(entry))
+        progress.setObjectName("Muted")
+        info.addWidget(progress)
+        outer.addLayout(info, 1)
+
+        resume = QPushButton("▶  Riprendi")
+        resume.setObjectName("Primary")
+        resume.clicked.connect(lambda _=False, e=entry: self._resume_entry(e))
+        outer.addWidget(resume)
+        remove = QPushButton("✕")
+        remove.setObjectName("Ghost")
+        remove.setFixedWidth(40)
+        remove.setToolTip("Rimuovi dalla cronologia")
+        remove.clicked.connect(
+            lambda _=False, t=entry.get("title", ""): self._remove_continue(t)
+        )
+        outer.addWidget(remove)
+        return row
+
+    def _remove_continue(self, title: str) -> None:
+        self.history.remove(title)
+        self._refresh_continue()
+
+    def _resume_entry(self, entry: dict) -> None:
+        number = str(entry.get("episode_number", ""))
+        slug = entry.get("slug", "")
+        watch = entry.get("watch_path") or (f"/anime/{slug}/ep-{number}" if slug else "")
+        self._launch_player(
+            entry.get("title", ""),
+            Episode(number, watch),
+            slug=slug,
+            poster=entry.get("poster", ""),
+            total=entry.get("total_episodes", 0) or 0,
+            resume_ms=entry.get("position_ms", 0) or 0,
+        )
+
+    def _load_thumb(self, label: QLabel, url: str) -> None:
+        if not url:
+            return
+        cached = AnimeCard._pixmap_cache.get(url)
+        if cached is not None:
+            self._apply_thumb(label, cached)
+            return
+        worker = PosterWorker(self.client, url)
+        # Keep a reference until it finishes: these thumbs are requested after the
+        # catalogue posters, so the worker would otherwise be garbage-collected (and
+        # its signal lost) while it waits its turn in the pool.
+        self._poster_workers.add(worker)
+
+        def _done(u: str, data: bytes, lbl=label, wk=worker) -> None:
+            self._poster_workers.discard(wk)
+            self._on_thumb_bytes(lbl, u, data)
+
+        def _drop(_u: str = "", wk=worker) -> None:
+            self._poster_workers.discard(wk)
+
+        worker.signals.done.connect(_done)
+        worker.signals.error.connect(_drop)
+        self.io_pool.start(worker)
+
+    def _on_thumb_bytes(self, label: QLabel, url: str, data: bytes) -> None:
+        pixmap = QPixmap()
+        if pixmap.loadFromData(data):
+            AnimeCard._pixmap_cache[url] = pixmap
+            self._apply_thumb(label, pixmap)
+
+    @staticmethod
+    def _apply_thumb(label: QLabel, pixmap: QPixmap) -> None:
+        try:
+            label.setText("")
+            label.setPixmap(
+                pixmap.scaled(
+                    64, 90, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+                )
+            )
+        except RuntimeError:
+            pass  # the row was removed before its poster arrived
+
+    # --- Library (downloaded files) --- #
+    def _refresh_library(self) -> None:
+        _clear_widgets_keep_stretch(self.library_layout)
+        groups = self._scan_library()
+        for group in groups:
+            self.library_layout.insertWidget(
+                self.library_layout.count() - 1, self._library_group(group)
+            )
+        self.library_empty.setVisible(not groups)
+
+    def _scan_library(self) -> list[dict]:
+        root = Path(self.settings.download_dir)
+        groups: list[dict] = []
+        try:
+            folders = sorted(
+                (p for p in root.iterdir() if p.is_dir()), key=lambda p: p.name.lower()
+            )
+        except OSError:
+            return groups
+        for folder in folders:
+            files = []
+            for file in sorted(folder.glob("*.mp4")):
+                match = re.search(r"- Ep (\S+)", file.stem)
+                try:
+                    size = file.stat().st_size
+                except OSError:
+                    size = -1
+                files.append(
+                    {
+                        "label": match.group(1) if match else file.stem,
+                        "path": str(file),
+                        "size": size,
+                    }
+                )
+            if files:
+                groups.append({"title": folder.name, "files": files})
+        return groups
+
+    def _library_group(self, group: dict) -> QWidget:
+        box = QFrame()
+        box.setObjectName("Row")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+
+        header = QHBoxLayout()
+        title = QLabel(group["title"])
+        title.setStyleSheet("font-weight:600;")
+        header.addWidget(title)
+        header.addStretch(1)
+        count = QLabel(f"{len(group['files'])} file")
+        count.setObjectName("Muted")
+        header.addWidget(count)
+        layout.addLayout(header)
+
+        total = len(group["files"])
+        for entry in group["files"]:
+            line = QHBoxLayout()
+            line.setSpacing(8)
+            line.addWidget(QLabel(f"Episodio {entry['label']}"))
+            line.addStretch(1)
+            size = QLabel(human_size(entry["size"]))
+            size.setObjectName("Muted")
+            line.addWidget(size)
+            play = QPushButton("▶  Riproduci")
+            play.setObjectName("Ghost")
+            play.clicked.connect(
+                lambda _=False, t=group["title"], lab=entry["label"], p=entry["path"], n=total:  # noqa: E501
+                self._play_local(t, lab, p, n)
+            )
+            line.addWidget(play)
+            layout.addLayout(line)
+        return box
+
+    def _play_local(self, title: str, label: str, path: str, total: int) -> None:
+        entry = self.history.entry(title)
+        slug = entry.get("slug", "") if entry else ""
+        watch = f"/anime/{slug}/ep-{label}" if slug else ""
+        self._launch_player(
+            title,
+            Episode(str(label), watch),
+            slug=slug,
+            total=total,
+            resume_ms=self.history.resume_position(title, label),
+            local_path=path,
+        )
+
+    # ------------------------------------------------------------------ #
     # Search / browse
     # ------------------------------------------------------------------ #
     def _toggle_filters(self) -> None:
@@ -706,6 +1030,7 @@ class MainWindow(QMainWindow):
             self.detail_plot.setText(plot[:600] + ("…" if len(plot) > 600 else ""))
 
         # The episode tiles are the authoritative count: refine the range spinboxes.
+        self._detail_total = len(episodes)
         if episodes:
             count = len(episodes)
             self.range_from.setMaximum(count)
@@ -801,20 +1126,88 @@ class MainWindow(QMainWindow):
         self._preview_episode(item)
 
     def _open_player(self, episode: Episode) -> None:
+        """Play an episode from the detail view (local file if downloaded, else stream)."""
         if not self._detail_anime:
             return
+        anime = self._detail_anime
+        total = self.episode_list.count() or anime.episodes_count
+        self._launch_player(
+            anime.title, episode, slug=anime.slug, poster=anime.poster, total=total
+        )
+
+    def _launch_player(
+        self,
+        anime_title: str,
+        episode: Episode,
+        *,
+        slug: str = "",
+        poster: str = "",
+        total: int = 0,
+        resume_ms: int | None = None,
+        local_path: str = "",
+    ) -> None:
+        # Prefer an already-downloaded copy (instant, offline) when we have one.
+        if not local_path:
+            local_path = self._find_local_file(anime_title, episode.number)
+        if resume_ms is None:
+            resume_ms = self.history.resume_position(anime_title, episode.number)
         window = PlayerWindow(
-            self.client, self._detail_anime.title, episode, self.io_pool, self
+            self.client,
+            anime_title,
+            episode,
+            self.io_pool,
+            total=total,
+            resume_ms=resume_ms,
+            local_path=local_path,
+            parent=self,
         )
         window.download_requested.connect(self._enqueue_one)
-        window.finished.connect(lambda _result, w=window: self._players.discard(w))
+        window.progress.connect(
+            lambda pos, dur, fin, t=anime_title, e=episode, s=slug, p=poster, tot=total, lp=local_path:  # noqa: E501
+            self._save_progress(t, e, s, p, tot, pos, dur, fin, lp)
+        )
+        window.finished.connect(lambda _r, w=window: self._on_player_closed(w))
         self._players.add(window)
         window.show()
+
+    def _on_player_closed(self, window) -> None:
+        self._players.discard(window)
+        self._refresh_watch_views()
+
+    def _save_progress(
+        self, title, episode, slug, poster, total, position, duration, finished, local_path
+    ) -> None:
+        self.history.record(
+            title=title,
+            episode_number=episode.number,
+            total_episodes=total,
+            position_ms=position,
+            duration_ms=duration,
+            finished=finished,
+            slug=slug,
+            poster=poster,
+            watch_path=episode.watch_path,
+            file_path=local_path,
+        )
+
+    def _find_local_file(self, title: str, number: str) -> str:
+        """Path to the downloaded ``.mp4`` for an episode, or ``""`` if not present."""
+        folder = Path(self.settings.download_dir) / sanitize_name(title)
+        if not folder.is_dir():
+            return ""
+        prefix = f"{sanitize_name(title)} - Ep {episode_label(Episode(str(number), ''))}"
+        try:
+            for file in folder.glob("*.mp4"):
+                if file.stem == prefix or file.stem.startswith(prefix + " "):
+                    return str(file)
+        except OSError:
+            return ""
+        return ""
 
     def _enqueue_one(self, anime_title: str, episode: Episode) -> None:
         dest_dir = Path(self.settings.download_dir) / sanitize_name(anime_title)
         self._enqueue_download(anime_title, episode, dest_dir)
-        self.tabs.setCurrentIndex(1)
+        self.tabs.setCurrentIndex(self._downloads_tab_index)
         self._update_empty_queue()
 
     # ------------------------------------------------------------------ #
@@ -836,7 +1229,7 @@ class MainWindow(QMainWindow):
         for episode in episodes:
             self._enqueue_download(anime.title, episode, dest_dir)
 
-        self.tabs.setCurrentIndex(1)
+        self.tabs.setCurrentIndex(self._downloads_tab_index)
         self._update_empty_queue()
 
     def _enqueue_download(self, anime_title: str, episode: Episode, dest_dir: Path) -> None:
@@ -872,6 +1265,8 @@ class MainWindow(QMainWindow):
             row.set_finished(success, message)
         self._tasks.pop(task_id, None)
         self._update_empty_queue()
+        if success:
+            self._refresh_watch_views()  # a new file may belong in the library
 
     def _cancel_task(self, task_id: int) -> None:
         task = self._tasks.get(task_id)
@@ -895,7 +1290,10 @@ class MainWindow(QMainWindow):
     def _update_empty_queue(self) -> None:
         self.empty_queue_label.setVisible(not self._rows)
         active = len(self._tasks)
-        self.tabs.setTabText(1, f"Download ({active})" if active else "Download")
+        self.tabs.setTabText(
+            self._downloads_tab_index,
+            f"Download ({active})" if active else "Download",
+        )
 
     # ------------------------------------------------------------------ #
     # Settings
