@@ -39,10 +39,11 @@ from .workers import ResolveWorker
 SR = 16000
 FRAME = int(SR * 0.2)      # 0.2 s frames -> 5 fps
 FRAME_MS = 200
-DECODE_SEC = 300           # analyse the first 5 minutes (covers cold opens + OP)
+DECODE_SEC = 240           # analyse the first 4 minutes (covers cold opens + OP)
 NBANDS = 20
 THRESH = 0.55              # frame-similarity threshold for a match
-MIN_OP_FRAMES = 100        # >= 20 s to count as an opening
+MIN_OP_FRAMES = 100        # >= 20 s of matching audio to count as an opening
+GAP_FRAMES = 10            # bridge dips up to 2 s so a whole opening isn't split in two
 
 
 def fingerprint(samples: np.ndarray) -> np.ndarray | None:
@@ -70,7 +71,15 @@ def fingerprint(samples: np.ndarray) -> np.ndarray | None:
 
 
 def find_common(fp_cur: np.ndarray, fp_ref: np.ndarray, thresh: float = THRESH):
-    """Longest contiguous matching segment; returns (length_frames, start_frame_in_cur)."""
+    """Longest matching segment on any time-offset diagonal.
+
+    Returns ``(length_frames, start_frame_in_cur)`` spanning the *whole* opening.
+    Sub-threshold dips inside the opening (a quiet bar, a breath before the chorus)
+    are bridged up to ``GAP_FRAMES`` so the match is not cut short at the first dip,
+    which used to make "Salta intro" jump only part of the sigla. A segment must
+    still contain ``MIN_OP_FRAMES`` real matches, so content after the OP — which
+    does not match the reference — cannot extend it.
+    """
     sim = fp_cur @ fp_ref.T  # (Na, Nb), ~[-1, 1]
     na, nb = sim.shape
     best_len = best_start = 0
@@ -80,19 +89,29 @@ def find_common(fp_cur: np.ndarray, fp_ref: np.ndarray, thresh: float = THRESH):
         if i1 - i0 < MIN_OP_FRAMES:
             continue
         rows = np.arange(i0, i1)
-        diag = sim[rows, rows + d] > thresh
-        run = cur = start = best = best_at = 0
-        for k in range(diag.shape[0]):
-            if diag[k]:
-                if cur == 0:
-                    start = k
-                cur += 1
-                if cur > best:
-                    best, best_at = cur, start
-            else:
-                cur = 0
-        if best > best_len:
-            best_len, best_start = best, i0 + best_at
+        hit = sim[rows, rows + d] > thresh
+        run_start = None
+        run_hits = last_hit = gap = 0
+
+        def _close() -> None:
+            nonlocal best_len, best_start
+            extent = last_hit - run_start + 1
+            if run_hits >= MIN_OP_FRAMES and extent > best_len:
+                best_len, best_start = extent, i0 + run_start
+
+        for k in range(hit.shape[0]):
+            if hit[k]:
+                if run_start is None:
+                    run_start, run_hits = k, 0
+                last_hit, gap = k, 0
+                run_hits += 1
+            elif run_start is not None:
+                gap += 1
+                if gap > GAP_FRAMES:
+                    _close()
+                    run_start = None
+        if run_start is not None:
+            _close()
     return best_len, best_start
 
 
