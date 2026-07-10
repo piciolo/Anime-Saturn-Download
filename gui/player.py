@@ -41,6 +41,7 @@ class PlayerWindow(QDialog):
 
     download_requested = Signal(str, object)     # anime_title, Episode
     progress = Signal(int, int, bool)            # position_ms, duration_ms, finished
+    ended = Signal()                             # reached the end of the episode
 
     def __init__(
         self,
@@ -49,6 +50,8 @@ class PlayerWindow(QDialog):
         episode: Episode,
         pool,
         *,
+        slug: str = "",
+        poster: str = "",
         total: int = 0,
         resume_ms: int = 0,
         local_path: str = "",
@@ -59,6 +62,8 @@ class PlayerWindow(QDialog):
         self.anime_title = anime_title
         self.episode = episode
         self.pool = pool
+        self.slug = slug
+        self.poster = poster
         self.total = total
         self.local_path = local_path
         self._token = object()  # invalidated on close to drop late resolve signals
@@ -207,6 +212,34 @@ class PlayerWindow(QDialog):
         self.status.setText(f"Impossibile avviare lo streaming.\n{message}")
         self.status.show()
 
+    def play_episode(
+        self, episode: Episode, *, local_path: str = "", resume_ms: int = 0
+    ) -> None:
+        """Switch the window to another episode (used to auto-play the next one)."""
+        self.episode = episode
+        self.local_path = local_path
+        self._resume_ms = max(int(resume_ms), 0)
+        self._resumed = False
+        self._token = object()
+        self._media_url = ""
+        where = (
+            f"Episodio {episode.number} di {self.total}"
+            if self.total
+            else episode.number_label
+        )
+        self.where_label.setText(where)
+        prefix = "▶" if local_path else "Anteprima ·"
+        self.setWindowTitle(f"{prefix} {self.anime_title} — {where}")
+        self.download_button.setVisible(not local_path)
+        self.download_button.setText("⬇  Scarica")
+        self.download_button.setEnabled(True)
+        self.external_button.setEnabled(bool(local_path))
+        self.status.setText("Caricamento…")
+        self.status.show()
+        self.position_slider.setRange(0, 0)
+        self.player.stop()
+        self._start()
+
     def _maybe_resume(self) -> None:
         """Resume from the saved position, retrying until the seek actually lands.
 
@@ -284,6 +317,7 @@ class PlayerWindow(QDialog):
             self.status.setText("Fine episodio")
             self.status.show()
             self._emit_progress(finished=True)
+            self.ended.emit()  # let the main window auto-play the next episode
 
     def _on_error(self, error: QMediaPlayer.Error, message: str) -> None:
         if error == QMediaPlayer.NoError:

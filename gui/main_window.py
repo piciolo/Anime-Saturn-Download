@@ -1156,16 +1156,19 @@ class MainWindow(QMainWindow):
             anime_title,
             episode,
             self.io_pool,
+            slug=slug,
+            poster=poster,
             total=total,
             resume_ms=resume_ms,
             local_path=local_path,
             parent=self,
         )
         window.download_requested.connect(self._enqueue_one)
+        # Read progress from the player (its episode changes when it auto-advances).
         window.progress.connect(
-            lambda pos, dur, fin, t=anime_title, e=episode, s=slug, p=poster, tot=total, lp=local_path:  # noqa: E501
-            self._save_progress(t, e, s, p, tot, pos, dur, fin, lp)
+            lambda pos, dur, fin, w=window: self._on_player_progress(w, pos, dur, fin)
         )
+        window.ended.connect(lambda w=window: self._advance_player(w))
         window.finished.connect(lambda _r, w=window: self._on_player_closed(w))
         self._players.add(window)
         window.show()
@@ -1174,20 +1177,38 @@ class MainWindow(QMainWindow):
         self._players.discard(window)
         self._refresh_watch_views()
 
-    def _save_progress(
-        self, title, episode, slug, poster, total, position, duration, finished, local_path
-    ) -> None:
+    def _on_player_progress(self, player, position, duration, finished) -> None:
         self.history.record(
-            title=title,
-            episode_number=episode.number,
-            total_episodes=total,
+            title=player.anime_title,
+            episode_number=player.episode.number,
+            total_episodes=player.total,
             position_ms=position,
             duration_ms=duration,
             finished=finished,
-            slug=slug,
-            poster=poster,
-            watch_path=episode.watch_path,
-            file_path=local_path,
+            slug=player.slug,
+            poster=player.poster,
+            watch_path=player.episode.watch_path,
+            file_path=player.local_path,
+        )
+
+    def _advance_player(self, player) -> None:
+        """When an episode ends, auto-play the next one in the same window."""
+        try:
+            current = int(str(player.episode.number))
+        except (TypeError, ValueError):
+            return
+        if player.total and current + 1 > player.total:
+            return  # last episode: nothing to advance to
+        number = str(current + 1)
+        watch = player.episode.watch_path
+        if "/ep-" in watch:
+            watch = watch.rsplit("/ep-", 1)[0] + f"/ep-{number}"
+        elif player.slug:
+            watch = f"/anime/{player.slug}/ep-{number}"
+        player.play_episode(
+            Episode(number, watch),
+            local_path=self._find_local_file(player.anime_title, number),
+            resume_ms=self.history.resume_position(player.anime_title, number),
         )
 
     def _find_local_file(self, title: str, number: str) -> str:
