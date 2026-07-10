@@ -7,7 +7,7 @@ progress back so the "continue watching" history stays up to date.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, QUrl, Signal, QTimer
+from PySide6.QtCore import QObject, QPoint, Qt, QUrl, Signal, QTimer
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -253,9 +253,18 @@ class PlayerWindow(QDialog):
         grid.addWidget(self.status, 0, 0, Qt.AlignCenter)
 
         # Netflix-style overlay button (skip intro / next episode / skip credits).
-        # It is a child of the video widget so it paints ON TOP of the video surface
-        # (a sibling in the layout would be hidden behind it); positioned manually.
-        self.overlay_button = QPushButton(self.video)
+        # It lives in its own frameless tool window kept over the video: even a child of
+        # the QVideoWidget can be painted over by the video surface on some GPUs, but a
+        # separate top-level window always renders on top. Positioned manually.
+        self.overlay_button = QPushButton(self)
+        self.overlay_button.setWindowFlags(
+            Qt.Tool
+            | Qt.FramelessWindowHint
+            | Qt.NoDropShadowWindowHint
+            | Qt.WindowStaysOnTopHint  # sit above the fullscreen (also topmost) player
+        )
+        self.overlay_button.setAttribute(Qt.WA_TranslucentBackground)
+        self.overlay_button.setAttribute(Qt.WA_ShowWithoutActivating)
         self.overlay_button.setObjectName("Overlay")
         self.overlay_button.setCursor(Qt.PointingHandCursor)
         self.overlay_button.setStyleSheet(
@@ -451,6 +460,8 @@ class PlayerWindow(QDialog):
             elif self._has_next():
                 mode = "next"
         if mode == self._overlay_mode:
+            if mode is not None:
+                self._position_overlay()  # keep the floating window glued to the video
             return
         self._overlay_mode = mode
         labels = {
@@ -467,13 +478,16 @@ class PlayerWindow(QDialog):
             self.overlay_button.hide()
 
     def _position_overlay(self) -> None:
-        """Place the overlay button in the bottom-right of the video surface."""
+        """Place the overlay window over the bottom-right of the video (global coords)."""
         btn = self.overlay_button
         btn.adjustSize()
         margin = 24
+        bottom_right = self.video.mapToGlobal(
+            QPoint(self.video.width(), self.video.height())
+        )
         btn.move(
-            max(self.video.width() - btn.width() - margin, 0),
-            max(self.video.height() - btn.height() - margin, 0),
+            bottom_right.x() - btn.width() - margin,
+            bottom_right.y() - btn.height() - margin,
         )
 
     def _overlay_clicked(self) -> None:
@@ -679,6 +693,7 @@ class PlayerWindow(QDialog):
         super().keyPressEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self.overlay_button.close()  # the overlay is a separate top-level window
         self._save_timer.stop()
         self._emit_progress()  # final persist (may auto-mark finished near the end)
         self._token = object()  # ignore any in-flight resolve result
