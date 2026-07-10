@@ -172,6 +172,7 @@ class PlayerWindow(QDialog):
         self.position_slider.sliderReleased.connect(self._end_seek)
         self.player.positionChanged.connect(self._on_position)
         self.player.durationChanged.connect(self._on_duration)
+        self.player.seekableChanged.connect(lambda *_: self._maybe_resume())
         self.player.playbackStateChanged.connect(self._on_state)
         self.player.mediaStatusChanged.connect(self._on_media_status)
         self.player.errorOccurred.connect(self._on_error)
@@ -207,13 +208,24 @@ class PlayerWindow(QDialog):
         self.status.show()
 
     def _maybe_resume(self) -> None:
-        """Seek to the saved position once the media is loaded (only once)."""
-        duration = self.player.duration()
-        if self._resumed or self._resume_ms <= 0 or duration <= 0:
+        """Resume from the saved position, retrying until the seek actually lands.
+
+        A single ``setPosition`` right after ``play()`` on a network stream is silently
+        dropped (playback stays at the start), so we re-issue it on every position
+        update and only consider it done once playback has reached the target.
+        """
+        if self._resumed or self._resume_ms <= 0:
             return
-        if self._resume_ms < duration - 15_000:  # don't resume right at the end
-            self.player.setPosition(self._resume_ms)
-        self._resumed = True
+        duration = self.player.duration()
+        if duration <= 0 or not self.player.isSeekable():
+            return
+        if self._resume_ms >= duration - 15_000:  # too close to the end: skip resuming
+            self._resumed = True
+            return
+        if self.player.position() >= self._resume_ms - 3_000:  # the seek has landed
+            self._resumed = True
+            return
+        self.player.setPosition(self._resume_ms)
 
     # ------------------------------------------------------------------ #
     # Progress reporting
@@ -243,6 +255,7 @@ class PlayerWindow(QDialog):
         self.player.setPosition(self.position_slider.value())
 
     def _on_position(self, position: int) -> None:
+        self._maybe_resume()  # keep retrying the resume seek until it lands
         if not self._seeking:
             self.position_slider.setValue(position)
         self.time_label.setText(f"{_fmt(position)} / {_fmt(self.player.duration())}")
@@ -332,6 +345,7 @@ class PlayerWindow(QDialog):
             self.player.mediaStatusChanged.disconnect()
             self.player.positionChanged.disconnect()
             self.player.durationChanged.disconnect()
+            self.player.seekableChanged.disconnect()
             self.player.errorOccurred.disconnect()
         except (RuntimeError, TypeError):
             pass
