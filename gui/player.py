@@ -280,12 +280,21 @@ class PlayerWindow(QDialog):
         self.status.show()
 
     def _toggle_fullscreen(self) -> None:
-        if self.isFullScreen():
+        self._set_fullscreen(not self.isFullScreen())
+
+    def _set_fullscreen(self, on: bool) -> None:
+        # A parented QDialog isn't granted "exclusive" fullscreen on Windows, so the
+        # taskbar stays on top. Forcing stay-on-top (and taking focus) makes the video
+        # cover the whole screen, taskbar included; the flag is dropped on exit.
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+        if on:
+            self.showFullScreen()
+            self.raise_()
+            self.activateWindow()
+            self.fullscreen_button.setText("⤢  Riduci")
+        else:
             self.showNormal()
             self.fullscreen_button.setText("⛶  Schermo intero")
-        else:
-            self.showFullScreen()
-            self.fullscreen_button.setText("⤢  Riduci")
 
     def _open_external(self) -> None:
         if self._media_url:
@@ -305,8 +314,7 @@ class PlayerWindow(QDialog):
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.key() == Qt.Key_Escape and self.isFullScreen():
-            self.showNormal()
-            self.fullscreen_button.setText("⛶  Schermo intero")
+            self._set_fullscreen(False)
             return
         if event.key() == Qt.Key_Space:
             self._toggle_play()
