@@ -248,19 +248,20 @@ class PlayerWindow(QDialog):
         grid.addWidget(self.status, 0, 0, Qt.AlignCenter)
 
         # Netflix-style overlay button (skip intro / next episode / skip credits).
-        self.overlay_button = QPushButton()
+        # It is a child of the video widget so it paints ON TOP of the video surface
+        # (a sibling in the layout would be hidden behind it); positioned manually.
+        self.overlay_button = QPushButton(self.video)
         self.overlay_button.setObjectName("Overlay")
         self.overlay_button.setCursor(Qt.PointingHandCursor)
         self.overlay_button.setStyleSheet(
-            "QPushButton#Overlay{background:rgba(18,19,26,0.82);color:#fff;"
-            "border:1px solid rgba(255,255,255,0.30);border-radius:10px;"
-            "padding:11px 20px;font-size:15px;font-weight:600;margin:0 26px 22px 0;}"
-            "QPushButton#Overlay:hover{background:rgba(124,92,255,0.92);"
+            "QPushButton#Overlay{background:rgba(18,19,26,0.85);color:#fff;"
+            "border:1px solid rgba(255,255,255,0.32);border-radius:10px;"
+            "padding:11px 20px;font-size:15px;font-weight:600;}"
+            "QPushButton#Overlay:hover{background:rgba(124,92,255,0.95);"
             "border-color:#9179ff;}"
         )
         self.overlay_button.clicked.connect(self._overlay_clicked)
         self.overlay_button.hide()
-        grid.addWidget(self.overlay_button, 0, 0, Qt.AlignRight | Qt.AlignBottom)
 
         layout.addWidget(stage, 1)
 
@@ -446,10 +447,21 @@ class PlayerWindow(QDialog):
         }
         if mode:
             self.overlay_button.setText(labels[mode])
+            self._position_overlay()
             self.overlay_button.show()
             self.overlay_button.raise_()
         else:
             self.overlay_button.hide()
+
+    def _position_overlay(self) -> None:
+        """Place the overlay button in the bottom-right of the video surface."""
+        btn = self.overlay_button
+        btn.adjustSize()
+        margin = 24
+        btn.move(
+            max(self.video.width() - btn.width() - margin, 0),
+            max(self.video.height() - btn.height() - margin, 0),
+        )
 
     def _overlay_clicked(self) -> None:
         mode = self._overlay_mode
@@ -579,6 +591,8 @@ class PlayerWindow(QDialog):
     def eventFilter(self, obj, event):  # noqa: N802 (Qt override)
         if obj is self.video:
             kind = event.type()
+            if kind == event.Type.Resize:
+                self._position_overlay()
             if kind == event.Type.MouseButtonRelease:
                 self._reveal_controls()
                 if self._dbl:
