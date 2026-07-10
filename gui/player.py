@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .introdetect import IntroDetector
 from .models import Episode
 from .net import AnimeSaturnClient
 from .workers import ResolveWorker
@@ -185,8 +186,11 @@ class PlayerWindow(QDialog):
         self._resume_ms = max(int(resume_ms), 0)
         self._resumed = False
         self._extra_start = 0        # post-credits start (ms), 0 = none detected
+        self._op_start = 0           # opening start (ms), detected by fingerprinting
+        self._op_end = 0             # opening end (ms), 0 = not detected
         self._overlay_mode = None    # None / "intro" / "next" / "credits"
         self._probe = None
+        self._intro_det = None
 
         self.setObjectName("Player")
         where = f"Episodio {episode.number} di {total}" if total else episode.number_label
@@ -345,6 +349,7 @@ class PlayerWindow(QDialog):
             self.player.setSource(QUrl.fromLocalFile(self.local_path))
             self.player.play()
             self._start_probe()
+            self._start_intro_detection()
             return
         worker = ResolveWorker(self.client, self._token, self.episode.watch_path)
         worker.signals.done.connect(self._on_resolved)
@@ -360,6 +365,7 @@ class PlayerWindow(QDialog):
         self.player.setSource(QUrl(url))
         self.player.play()
         self._start_probe()
+        self._start_intro_detection()
 
     def _on_resolve_error(self, token: object, message: str) -> None:
         if token is not self._token:
@@ -378,6 +384,8 @@ class PlayerWindow(QDialog):
         self._token = object()
         self._media_url = ""
         self._extra_start = 0
+        self._op_start = 0
+        self._op_end = 0
         self._overlay_mode = None
         self.overlay_button.hide()
         where = (
@@ -431,9 +439,13 @@ class PlayerWindow(QDialog):
     def _update_overlay(self, position: int) -> None:
         duration = self.player.duration()
         mode = None
-        if INTRO_START_MS <= position <= INTRO_END_MS:
-            mode = "intro"
-        elif duration > 0 and position >= duration - END_WINDOW_MS:
+        if self._op_end > 0:
+            # Precise opening detected: show only while it actually plays.
+            if self._op_start - 2000 <= position < self._op_end - 500:
+                mode = "intro"
+        elif INTRO_START_MS <= position <= INTRO_END_MS:
+            mode = "intro"  # not detected yet: fall back to the early time window
+        if mode is None and duration > 0 and position >= duration - END_WINDOW_MS:
             if self._extra_start and position < self._extra_start:
                 mode = "credits"
             elif self._has_next():
@@ -469,8 +481,13 @@ class PlayerWindow(QDialog):
         self.overlay_button.hide()
         self._overlay_mode = None
         if mode == "intro":
-            target = min(self.player.position() + INTRO_SKIP_MS, self.player.duration())
-            self.player.setPosition(target)
+            if self._op_end > 0:  # precise: jump exactly to the end of the opening
+                self.player.setPosition(self._op_end)
+            else:
+                target = min(
+                    self.player.position() + INTRO_SKIP_MS, self.player.duration()
+                )
+                self.player.setPosition(target)
         elif mode == "credits":
             self.player.setPosition(self._extra_start)
         elif mode == "next":
@@ -489,6 +506,28 @@ class PlayerWindow(QDialog):
     def _on_probe(self, token, extra_start: int) -> None:
         if token is self._token and extra_start > 0:
             self._extra_start = extra_start
+
+    def _start_intro_detection(self) -> None:
+        """Locate the opening precisely by fingerprinting against another episode."""
+        if not self.slug or not self._media_url:
+            return
+        try:
+            current = int(str(self.episode.number))
+        except (TypeError, ValueError):
+            return
+        ref = 1 if current != 1 else 2
+        detector = IntroDetector(
+            self.client, self.slug, current, self._media_url, ref, self
+        )
+        self._intro_det = detector
+        token = self._token
+        detector.detected.connect(lambda s, e, tok=token: self._on_intro(tok, s, e))
+        detector.start()
+
+    def _on_intro(self, token, start_ms: int, end_ms: int) -> None:
+        if token is self._token and end_ms > 0:
+            self._op_start = start_ms
+            self._op_end = end_ms
 
     # ------------------------------------------------------------------ #
     # Progress reporting
