@@ -128,7 +128,9 @@ class MainWindow(QMainWindow):
         self._poster_workers: set = set()
         self.history = WatchHistory()
 
-        self.setWindowTitle("AnimeSaturn Downloader")
+        from . import __version__
+
+        self.setWindowTitle(f"AnimeSaturn Downloader v{__version__}")
         self.resize(1180, 820)
         self.setMinimumSize(940, 640)
 
@@ -187,6 +189,11 @@ class MainWindow(QMainWindow):
         title = QLabel("AnimeSaturn Downloader")
         title.setObjectName("Title")
         top.addWidget(title)
+        from . import __version__
+
+        version = QLabel(f"v{__version__}")
+        version.setObjectName("Muted")
+        top.addWidget(version)
         top.addStretch(1)
 
         self.folder_button = QPushButton("📁  Cartella download")
