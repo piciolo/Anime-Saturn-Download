@@ -36,9 +36,10 @@ def _fmt(ms: int) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
-# Skip-intro: show the button in this early window and jump forward a standard OP.
+# Skip-intro: show the button through this early window (wide enough to cover a cold
+# open before the opening) and jump forward a standard OP when clicked.
 INTRO_START_MS = 8_000
-INTRO_END_MS = 150_000
+INTRO_END_MS = 300_000
 INTRO_SKIP_MS = 85_000
 # End-of-episode overlay window (roughly the ending-credits stretch).
 END_WINDOW_MS = 90_000
