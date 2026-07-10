@@ -93,6 +93,19 @@ class PlayerWindow(QDialog):
         self._save_timer = QTimer(self)
         self._save_timer.setInterval(5000)
         self._save_timer.timeout.connect(lambda: self._emit_progress())
+        # Auto-hide the controls (and cursor) in fullscreen for an immersive view.
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(2500)
+        self._hide_timer.timeout.connect(self._auto_hide)
+        # Distinguish a single click (play/pause) from a double click (fullscreen).
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(220)
+        self._click_timer.timeout.connect(self._toggle_play)
+        self._dbl = False
+        self.setMouseTracking(True)
+        self.video.setMouseTracking(True)
 
         self._build_ui(where)
         self._connect()
@@ -120,6 +133,12 @@ class PlayerWindow(QDialog):
         grid.addWidget(self.status, 0, 0, Qt.AlignCenter)
         layout.addWidget(stage, 1)
 
+        # The seek bar + controls live in one container that auto-hides in fullscreen.
+        self.controls_bar = QWidget()
+        bar = QVBoxLayout(self.controls_bar)
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(10)
+
         seek_row = QHBoxLayout()
         seek_row.setSpacing(10)
         self.position_slider = QSlider(Qt.Horizontal)
@@ -128,7 +147,7 @@ class PlayerWindow(QDialog):
         self.time_label = QLabel("00:00 / 00:00")
         self.time_label.setObjectName("Muted")
         seek_row.addWidget(self.time_label)
-        layout.addLayout(seek_row)
+        bar.addLayout(seek_row)
 
         controls = QHBoxLayout()
         controls.setSpacing(8)
@@ -165,7 +184,8 @@ class PlayerWindow(QDialog):
         self.download_button.setObjectName("Primary")
         self.download_button.setVisible(not self.local_path)
         controls.addWidget(self.download_button)
-        layout.addLayout(controls)
+        bar.addLayout(controls)
+        layout.addWidget(self.controls_bar)
 
     def _connect(self) -> None:
         self.play_button.clicked.connect(self._toggle_play)
@@ -339,7 +359,12 @@ class PlayerWindow(QDialog):
             self.raise_()
             self.activateWindow()
             self.fullscreen_button.setText("⤢  Riduci")
+            self._hide_timer.start()  # fade to an immersive, video-only view
         else:
+            self._hide_timer.stop()
+            self.controls_bar.show()
+            self.unsetCursor()
+            self.video.unsetCursor()
             self.showNormal()
             self.fullscreen_button.setText("⛶  Schermo intero")
 
@@ -354,10 +379,43 @@ class PlayerWindow(QDialog):
 
     # ------------------------------------------------------------------ #
     def eventFilter(self, obj, event):  # noqa: N802 (Qt override)
-        if obj is self.video and event.type() == event.Type.MouseButtonDblClick:
-            self._toggle_fullscreen()
-            return True
+        if obj is self.video:
+            kind = event.type()
+            if kind == event.Type.MouseButtonRelease:
+                self._reveal_controls()
+                if self._dbl:
+                    self._dbl = False  # trailing release of a double-click: ignore
+                else:
+                    self._click_timer.start()  # single click -> play/pause
+                return True
+            if kind == event.Type.MouseButtonDblClick:
+                self._dbl = True
+                self._click_timer.stop()  # cancel the pending single-click
+                self._toggle_fullscreen()
+                return True
+            if kind == event.Type.MouseMove:
+                self._reveal_controls()
         return super().eventFilter(obj, event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._reveal_controls()
+        super().mouseMoveEvent(event)
+
+    def _auto_hide(self) -> None:
+        """Hide the controls and cursor in fullscreen so only the video shows."""
+        if self.isFullScreen():
+            self.controls_bar.hide()
+            self.setCursor(Qt.BlankCursor)
+            self.video.setCursor(Qt.BlankCursor)
+
+    def _reveal_controls(self) -> None:
+        """Show the controls/cursor; in fullscreen, re-arm the auto-hide timer."""
+        if not self.controls_bar.isVisible():
+            self.controls_bar.show()
+        self.unsetCursor()
+        self.video.unsetCursor()
+        if self.isFullScreen():
+            self._hide_timer.start()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.key() == Qt.Key_Escape and self.isFullScreen():
