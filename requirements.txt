@@ -3,3 +3,6 @@ PySide6==6.9.2
 httpx==0.28.1
 # Audio fingerprinting for precise opening ("sigla") detection.
 numpy==2.4.4
+# Build tool only. >=6.11 is required so the frozen .exe bundles numpy 2.x correctly
+# (PyInstaller 5.x predates numpy 2.0's C-extension layout and breaks the packaged app).
+pyinstaller>=6.11

@@ -15,7 +15,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
+try:  # numpy powers the fingerprinting; if it fails to load the app must still run
+    import numpy as np
+
+    HAVE_NUMPY = True
+except Exception:  # noqa: BLE001 - any import/C-extension failure disables detection
+    np = None  # type: ignore[assignment]
+    HAVE_NUMPY = False
 from PySide6.QtCore import (
     QObject,
     QRunnable,
@@ -158,6 +164,11 @@ class IntroDetector(QObject):
             pass
 
     def start(self) -> None:
+        if not HAVE_NUMPY:
+            # No numpy → skip precise fingerprinting. The player falls back to the
+            # heuristic "Salta intro" button, and the app never crashes over this.
+            self.detected.emit(0, 0)
+            return
         data = self._load()
         entry = data.get(self.slug, {})
         cached = entry.get("eps", {}).get(self.cur_ep)
