@@ -8,4 +8,4 @@ packaged into a standalone Windows executable.
 
 __all__ = ["__version__"]
 
-__version__ = "1.7.4"
+__version__ = "1.7.5"

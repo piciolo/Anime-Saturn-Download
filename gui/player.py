@@ -42,6 +42,17 @@ def _fmt(ms: int) -> str:
 INTRO_START_MS = 8_000
 INTRO_END_MS = 300_000
 INTRO_SKIP_MS = 85_000
+# Background analysis competes with playback for bandwidth, so keep it out of the way:
+# the post-credits probe (a second player + a burst of seeks) only runs near the end, and
+# fingerprinting waits for the playback buffer to fill first.
+PROBE_LEAD_MS = 180_000
+INTRO_DELAY_MS = 8_000
+# Watchdog: a network stream that dies leaves QMediaPlayer in a state where even seeking
+# does nothing, so detect the stall and rebuild the source from a fresh signed URL.
+WATCHDOG_MS = 5_000
+STUCK_TICKS = 5            # 5 x 5 s without progress while "playing" = the stream is dead
+HEALTHY_TICKS = 6          # 30 s of good playback clears the recovery budget
+MAX_RECOVERIES = 5
 # End-of-episode overlay window (roughly the ending-credits stretch).
 END_WINDOW_MS = 90_000
 
@@ -190,7 +201,14 @@ class PlayerWindow(QDialog):
         self._op_end = 0             # opening end (ms), 0 = not detected
         self._overlay_mode = None    # None / "intro" / "next" / "credits"
         self._probe = None
+        self._probe_started = False
         self._intro_det = None
+        # Stream-recovery state (network sources only).
+        self._recovering = False
+        self._recover_attempts = 0
+        self._stuck_ticks = 0
+        self._healthy_ticks = 0
+        self._last_pos = -1
 
         self.setObjectName("Player")
         where = f"Episodio {episode.number} di {total}" if total else episode.number_label
@@ -213,6 +231,12 @@ class PlayerWindow(QDialog):
         self._save_timer = QTimer(self)
         self._save_timer.setInterval(5000)
         self._save_timer.timeout.connect(lambda: self._emit_progress())
+
+        # Watch for a stream that has silently died and rebuild it.
+        self._watchdog = QTimer(self)
+        self._watchdog.setInterval(WATCHDOG_MS)
+        self._watchdog.timeout.connect(self._watchdog_tick)
+        self._watchdog.start()
         # Auto-hide the controls (and cursor) in fullscreen for an immersive view.
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
@@ -373,8 +397,12 @@ class PlayerWindow(QDialog):
         self.status.setText("Caricamento…")
         self.player.setSource(QUrl(url))
         self.player.play()
-        self._start_probe()
-        self._start_intro_detection()
+        # The post-credits probe is deferred until the end is in sight (see _on_position)
+        # and fingerprinting waits a few seconds, so neither starves the playback buffer.
+        QTimer.singleShot(
+            INTRO_DELAY_MS,
+            lambda tok=self._token: self._start_intro_detection() if tok is self._token else None,
+        )
 
     def _on_resolve_error(self, token: object, message: str) -> None:
         if token is not self._token:
@@ -396,6 +424,12 @@ class PlayerWindow(QDialog):
         self._op_start = 0
         self._op_end = 0
         self._overlay_mode = None
+        self._probe_started = False
+        self._recovering = False
+        self._recover_attempts = 0
+        self._stuck_ticks = 0
+        self._healthy_ticks = 0
+        self._last_pos = -1
         self.overlay_button.hide()
         where = (
             f"Episodio {episode.number} di {self.total}"
@@ -509,8 +543,9 @@ class PlayerWindow(QDialog):
 
     def _start_probe(self) -> None:
         """Kick off the post-credits detector for the current media (best-effort)."""
-        if not self._media_url:
+        if not self._media_url or self._probe_started:
             return
+        self._probe_started = True
         probe = TailProbe(QUrl(self._media_url), self)
         self._probe = probe
         token = self._token
@@ -573,6 +608,10 @@ class PlayerWindow(QDialog):
     def _on_position(self, position: int) -> None:
         self._maybe_resume()  # keep retrying the resume seek until it lands
         self._update_overlay(position)
+        if not self._probe_started and not self.local_path:
+            duration = self.player.duration()
+            if duration > 0 and position >= duration - PROBE_LEAD_MS:
+                self._start_probe()  # only now is the extra-scene answer needed
         if not self._seeking:
             self.position_slider.setValue(position)
         self.time_label.setText(f"{_fmt(position)} / {_fmt(self.player.duration())}")
@@ -606,8 +645,71 @@ class PlayerWindow(QDialog):
     def _on_error(self, error: QMediaPlayer.Error, message: str) -> None:
         if error == QMediaPlayer.NoError:
             return
+        if not self.local_path and self._recover("errore di rete"):
+            return  # rebuilding the stream; no need to alarm the user
         hint = "Prova «Apri esternamente»." if not self.local_path else ""
         self.status.setText(f"Riproduzione non riuscita.\n{hint}\n({message})".strip())
+        self.status.show()
+
+    # ------------------------------------------------------------------ #
+    # Stream recovery
+    # ------------------------------------------------------------------ #
+    def _watchdog_tick(self) -> None:
+        """Spot a stream that stopped advancing and rebuild it from a fresh URL."""
+        if self.local_path or self._recovering:
+            return
+        if self.player.playbackState() != QMediaPlayer.PlayingState:
+            self._last_pos = -1  # paused/stopped: nothing to judge
+            return
+        position = self.player.position()
+        if self._last_pos >= 0 and position <= self._last_pos + 250:
+            self._stuck_ticks += 1
+            self._healthy_ticks = 0
+            if self._stuck_ticks >= STUCK_TICKS:
+                self._recover("flusso interrotto")
+        else:
+            self._stuck_ticks = 0
+            self._healthy_ticks += 1
+            if self._healthy_ticks >= HEALTHY_TICKS:
+                self._healthy_ticks = 0
+                self._recover_attempts = 0  # a long healthy run restores the budget
+        self._last_pos = position
+
+    def _recover(self, reason: str) -> bool:
+        """Re-resolve the episode and resume where playback died. True if attempted."""
+        if self.local_path or self._recovering or not self.episode.watch_path:
+            return False
+        if self._recover_attempts >= MAX_RECOVERIES:
+            return False
+        self._recovering = True
+        self._recover_attempts += 1
+        self._stuck_ticks = 0
+        self._last_pos = -1
+        # Resume from where we stopped, reusing the retry-until-it-lands seek logic.
+        self._resume_ms = max(self.player.position(), self._resume_ms, 0)
+        self._resumed = False
+        self.status.setText(f"Riconnessione… ({reason})")
+        self.status.show()
+        self.player.stop()
+        worker = ResolveWorker(self.client, self._token, self.episode.watch_path)
+        worker.signals.done.connect(self._on_recover_resolved)
+        worker.signals.error.connect(self._on_recover_error)
+        self.pool.start(worker)
+        return True
+
+    def _on_recover_resolved(self, token: object, url: str) -> None:
+        if token is not self._token:
+            return
+        self._media_url = url
+        self._recovering = False
+        self.player.setSource(QUrl(url))
+        self.player.play()
+
+    def _on_recover_error(self, token: object, message: str) -> None:
+        if token is not self._token:
+            return
+        self._recovering = False
+        self.status.setText(f"Riconnessione non riuscita.\n({message})")
         self.status.show()
 
     def _toggle_fullscreen(self) -> None:
@@ -697,6 +799,7 @@ class PlayerWindow(QDialog):
         self._save_timer.stop()
         self._emit_progress()  # final persist (may auto-mark finished near the end)
         self._token = object()  # ignore any in-flight resolve result
+        self._watchdog.stop()
         # Stop listening before teardown so the player's own signals don't fire into a
         # half-closed window while it unwinds.
         try:
