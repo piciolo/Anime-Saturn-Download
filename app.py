@@ -6,6 +6,7 @@ No command-line arguments are required.
 
 from __future__ import annotations
 
+import collections
 import faulthandler
 import os
 import sys
@@ -25,6 +26,46 @@ if sys.platform.startswith("win"):
     os.environ.setdefault(
         "QT_MEDIA_BACKEND", os.environ.get("ANIMESATURN_MEDIA_BACKEND", "windows")
     )
+
+# Media-engine diagnostics. Under pythonw there is no console, so anything the engine
+# prints to stderr is lost; QT_FFMPEG_DEBUG reroutes ffmpeg's own log through Qt's message
+# handler instead, where we can keep it. Enabling every qt.multimedia category is
+# unusable (~2700 lines / 18 s from codecstorage and resampler.trace), so pick the useful
+# ones: they are silent during steady playback and only speak up around opens and seeks.
+if os.environ.get("QT_MEDIA_BACKEND") == "ffmpeg":
+    os.environ.setdefault("QT_FFMPEG_DEBUG", "1")
+    os.environ.setdefault(
+        "QT_LOGGING_RULES",
+        ";".join(
+            [
+                "qt.multimedia.*=false",
+                "qt.multimedia.ffmpeg.demuxer=true",
+                "qt.multimedia.ffmpeg.playbackengine=true",
+                "qt.multimedia.ffmpeg.mediadataholder=true",
+                "qt.multimedia.ffmpeg.audiorenderer=true",
+            ]
+        ),
+    )
+
+# Recent engine messages, kept in memory so they survive a freeze and can be dumped with
+# the thread stacks. Bounded, so a long session cannot grow it without limit.
+_MEDIA_LOG: collections.deque[str] = collections.deque(maxlen=3000)
+_MEDIA_LOG_LOCK = threading.Lock()
+_STARTED = time.monotonic()
+_LOG_NOISE = ("Transform tree", "mdct_", "nal_unit_type", "Decoding VUI")
+
+
+def _qt_message_handler(mode, context, message) -> None:
+    """Collect Qt/ffmpeg engine messages into the ring buffer."""
+    text = message.strip('"')
+    category = (getattr(context, "category", None) or "default")
+    if text.startswith("FFmpeg log: "):
+        text = text[12:]
+        if not text.strip() or any(n in text[:24] for n in _LOG_NOISE):
+            return
+        category = "ffmpeg"
+    with _MEDIA_LOG_LOCK:
+        _MEDIA_LOG.append(f"[{time.monotonic() - _STARTED:9.2f}s] {category} :: {text}")
 
 
 def _app_data_dir() -> Path:
@@ -70,6 +111,13 @@ def _install_freeze_watchdog() -> None:
                             f"INTERFACCIA BLOCCATA da {late:.0f}s "
                             f"(backend={os.environ.get('QT_MEDIA_BACKEND', 'default')}) =====\n"
                         )
+                        with _MEDIA_LOG_LOCK:
+                            recent = list(_MEDIA_LOG)[-120:]
+                        fh.write(
+                            "--- ultimi messaggi del motore video prima del blocco ---\n"
+                        )
+                        fh.write("\n".join(recent) if recent else "(nessun messaggio)")
+                        fh.write("\n--- stack di tutti i thread ---\n")
                         fh.flush()
                         faulthandler.dump_traceback(file=fh, all_threads=True)
                 except Exception:  # noqa: BLE001 - diagnostics must never add problems
@@ -107,8 +155,11 @@ def _report_crash(exc: BaseException) -> None:
 def main() -> int:
     # Imports live here so an import-time failure (e.g. a broken dependency) is caught
     # by run() and reported, instead of crashing before any handler is installed.
+    from PySide6.QtCore import qInstallMessageHandler
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
+
+    qInstallMessageHandler(_qt_message_handler)
 
     from gui.main_window import create_window
     from gui.theme import APP_QSS, build_palette
