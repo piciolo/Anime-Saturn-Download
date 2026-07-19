@@ -7,6 +7,10 @@ progress back so the "continue watching" history stays up to date.
 
 from __future__ import annotations
 
+import os
+import time
+from pathlib import Path
+
 from PySide6.QtCore import QObject, QPoint, Qt, QUrl, Signal, QTimer
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
@@ -27,6 +31,29 @@ from .introdetect import IntroDetector
 from .models import Episode
 from .net import AnimeSaturnClient
 from .workers import ResolveWorker
+
+
+def _diag(message: str) -> None:
+    """Append a line to the playback diagnostics log (best-effort, size-capped).
+
+    Freezes have proven impossible to reproduce synthetically, so the app records what
+    the player was actually doing. The log holds no tokens or signed URLs.
+    """
+    try:
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        root = (
+            Path(base) / "AnimeSaturnDownloader"
+            if base
+            else Path.home() / ".animesaturn_downloader"
+        )
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / "playback.log"
+        if path.exists() and path.stat().st_size > 512_000:
+            path.unlink()  # keep the log small; the recent past is what matters
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {message}\n")
+    except Exception:  # noqa: BLE001 - diagnostics must never disturb playback
+        pass
 
 
 def _fmt(ms: int) -> str:
@@ -392,6 +419,10 @@ class PlayerWindow(QDialog):
     def _on_resolved(self, token: object, url: str) -> None:
         if token is not self._token:
             return
+        _diag(
+            f"=== START {self.anime_title} ep {self.episode.number} "
+            f"(resume {_fmt(self._resume_ms)}) ==="
+        )
         self._media_url = url
         self.external_button.setEnabled(True)
         self.status.setText("Caricamento…")
@@ -546,6 +577,7 @@ class PlayerWindow(QDialog):
         if not self._media_url or self._probe_started:
             return
         self._probe_started = True
+        _diag(f"probe started at {_fmt(self.player.position())}")
         probe = TailProbe(QUrl(self._media_url), self)
         self._probe = probe
         token = self._token
@@ -574,6 +606,7 @@ class PlayerWindow(QDialog):
         detector.start()
 
     def _on_intro(self, token, start_ms: int, end_ms: int) -> None:
+        _diag(f"intro detected: {_fmt(start_ms)} -> {_fmt(end_ms)}")
         if token is self._token and end_ms > 0:
             self._op_start = start_ms
             self._op_end = end_ms
@@ -630,6 +663,7 @@ class PlayerWindow(QDialog):
             self._emit_progress()  # persist on pause/stop
 
     def _on_media_status(self, status: QMediaPlayer.MediaStatus) -> None:
+        _diag(f"status -> {status.name} at {_fmt(self.player.position())}")
         if status in {QMediaPlayer.BufferedMedia, QMediaPlayer.BufferingMedia}:
             self.status.hide()
             self._maybe_resume()
@@ -645,6 +679,7 @@ class PlayerWindow(QDialog):
     def _on_error(self, error: QMediaPlayer.Error, message: str) -> None:
         if error == QMediaPlayer.NoError:
             return
+        _diag(f"ERROR {error.name}: {message} at {_fmt(self.player.position())}")
         if not self.local_path and self._recover("errore di rete"):
             return  # rebuilding the stream; no need to alarm the user
         hint = "Prova «Apri esternamente»." if not self.local_path else ""
@@ -658,6 +693,14 @@ class PlayerWindow(QDialog):
         """Spot a stream that stopped advancing and rebuild it from a fresh URL."""
         if self.local_path or self._recovering:
             return
+        # Heartbeat: this timeline is what identifies a freeze after the fact.
+        _diag(
+            f"tick pos={_fmt(self.player.position())} "
+            f"state={self.player.playbackState().name} "
+            f"status={self.player.mediaStatus().name} "
+            f"buffer={self.player.bufferProgress():.2f} "
+            f"stuck={self._stuck_ticks} probe={self._probe_started}"
+        )
         if self.player.playbackState() != QMediaPlayer.PlayingState:
             self._last_pos = -1  # paused/stopped: nothing to judge
             return
@@ -681,6 +724,10 @@ class PlayerWindow(QDialog):
             return False
         if self._recover_attempts >= MAX_RECOVERIES:
             return False
+        _diag(
+            f"RECOVER #{self._recover_attempts + 1} ({reason}) "
+            f"at {_fmt(self.player.position())} status={self.player.mediaStatus().name}"
+        )
         self._recovering = True
         self._recover_attempts += 1
         self._stuck_ticks = 0
@@ -700,6 +747,7 @@ class PlayerWindow(QDialog):
     def _on_recover_resolved(self, token: object, url: str) -> None:
         if token is not self._token:
             return
+        _diag(f"recovered: fresh URL, resuming at {_fmt(self._resume_ms)}")
         self._media_url = url
         self._recovering = False
         self.player.setSource(QUrl(url))
