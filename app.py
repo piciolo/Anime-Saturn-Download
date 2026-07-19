@@ -6,18 +6,78 @@ No command-line arguments are required.
 
 from __future__ import annotations
 
+import faulthandler
 import os
 import sys
+import threading
+import time
 import traceback
 from pathlib import Path
+
+# Choose the multimedia backend BEFORE Qt is imported.
+# A frozen session was caught in the act: the GUI thread was blocked inside Qt's native
+# ffmpeg backend (stack in app.exec(), zero CPU, the media socket left in CloseWait), which
+# freezes the whole window - no in-app timer can recover from that because the thread that
+# would run it is the blocked one. Windows' own backend was verified to handle playback,
+# seeking and QAudioDecoder equally well, so prefer it here. Set ANIMESATURN_MEDIA_BACKEND
+# to override (e.g. "ffmpeg") if a future Qt fixes this.
+if sys.platform.startswith("win"):
+    os.environ.setdefault(
+        "QT_MEDIA_BACKEND", os.environ.get("ANIMESATURN_MEDIA_BACKEND", "windows")
+    )
+
+
+def _app_data_dir() -> Path:
+    """A deterministic, writable directory for logs (no Qt needed)."""
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    root = Path(base) / "AnimeSaturnDownloader" if base else Path.home() / ".animesaturn_downloader"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def _crash_log_path() -> Path:
     """A deterministic, writable location for the crash log (no Qt needed)."""
-    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
-    root = Path(base) / "AnimeSaturnDownloader" if base else Path.home() / ".animesaturn_downloader"
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "crash.log"
+    return _app_data_dir() / "crash.log"
+
+
+def _install_freeze_watchdog() -> None:
+    """Record a frozen GUI from OUTSIDE it, since it cannot report on itself.
+
+    A QTimer marks the GUI thread alive; this plain thread notices when those marks stop
+    and writes every thread's stack to ``freeze.log``. It keeps running during a freeze
+    because a thread blocked in Qt's native code has released the GIL.
+    """
+    from PySide6.QtCore import QTimer
+
+    beat = [time.monotonic()]
+    timer = QTimer()
+    timer.setInterval(2_000)
+    timer.timeout.connect(lambda: beat.__setitem__(0, time.monotonic()))
+    timer.start()
+    _install_freeze_watchdog.timer = timer  # keep a reference alive
+
+    def watch() -> None:
+        reported = False
+        while True:
+            time.sleep(3)
+            late = time.monotonic() - beat[0]
+            if late > 15 and not reported:
+                reported = True
+                try:
+                    with (_app_data_dir() / "freeze.log").open("a", encoding="utf-8") as fh:
+                        fh.write(
+                            f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')}  "
+                            f"INTERFACCIA BLOCCATA da {late:.0f}s "
+                            f"(backend={os.environ.get('QT_MEDIA_BACKEND', 'default')}) =====\n"
+                        )
+                        fh.flush()
+                        faulthandler.dump_traceback(file=fh, all_threads=True)
+                except Exception:  # noqa: BLE001 - diagnostics must never add problems
+                    pass
+            elif late < 5:
+                reported = False  # recovered; arm again
+
+    threading.Thread(target=watch, daemon=True, name="freeze-watchdog").start()
 
 
 def _report_crash(exc: BaseException) -> None:
@@ -69,6 +129,7 @@ def main() -> int:
 
     window = create_window()
     window.show()
+    _install_freeze_watchdog()
     return app.exec()
 
 
