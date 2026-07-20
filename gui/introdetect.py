@@ -39,7 +39,10 @@ from .workers import ResolveWorker
 SR = 16000
 FRAME = int(SR * 0.2)      # 0.2 s frames -> 5 fps
 FRAME_MS = 200
-DECODE_SEC = 240           # analyse the first 4 minutes (covers cold opens + OP)
+DECODE_SEC = 420           # analyse the first 7 minutes: a cold open can push the
+                           # opening past 4:30, and anything outside this window simply
+                           # cannot be detected (a 4-minute window truncated a real
+                           # 3:02-4:47 opening at 3:56). Measured cost: ~80 s per episode.
 NBANDS = 20
 THRESH = 0.55              # frame-similarity threshold for a match
 MIN_OP_FRAMES = 100        # >= 20 s of matching audio to count as an opening
@@ -47,9 +50,15 @@ GAP_FRAMES = 10            # bridge dips up to 2 s so a whole opening isn't spli
 
 
 def fingerprint(samples: np.ndarray) -> np.ndarray | None:
-    """Return a per-frame, L2-normalised log band-energy fingerprint (n_frames x bands)."""
+    """Per-frame temporal-DELTA log band-energy fingerprint (n_frames-1 x bands).
+
+    The delta over time removes the stationary spectral shape (timbre): without it any
+    two anime soundtracks correlate at ~0.6 cosine — above THRESH — so old/band-limited
+    audio produced wall-to-wall spurious matches. Onsets survive the delta and only
+    align for genuinely identical audio, i.e. the shared opening.
+    """
     n = len(samples) // FRAME
-    if n < 30:
+    if n < 31:
         return None
     frames = samples[: n * FRAME].reshape(n, FRAME)
     spec = np.abs(np.fft.rfft(frames * np.hanning(FRAME), axis=1))
@@ -64,8 +73,7 @@ def fingerprint(samples: np.ndarray) -> np.ndarray | None:
         [spec[:, edges[k]:edges[k + 1]].sum(axis=1) for k in range(len(edges) - 1)],
         axis=1,
     )
-    fp = np.log1p(bands)
-    fp -= fp.mean(axis=1, keepdims=True)
+    fp = np.diff(np.log1p(bands), axis=0)
     fp /= np.linalg.norm(fp, axis=1, keepdims=True) + 1e-8
     return fp.astype(np.float32)
 
@@ -152,21 +160,27 @@ class IntroDetector(QObject):
 
     detected = Signal(int, int)  # op_start_ms, op_end_ms (0, 0 = none)
 
-    def __init__(self, client: AnimeSaturnClient, slug, cur_ep, cur_url, ref_ep, parent=None) -> None:
+    def __init__(self, client: AnimeSaturnClient, slug, cur_ep, cur_url, ref_eps, parent=None) -> None:
         super().__init__(parent)
         self.client = client
         self.slug = slug
         self.cur_ep = str(cur_ep)
         self.cur_url = cur_url
-        self.ref_ep = str(ref_ep)
+        # Several reference candidates, tried in turn: measured on a real series, only
+        # 1 of 6 episode pairs shared an opening - premieres and specials routinely have
+        # none, so a single fixed reference (episode 1) can fail for a whole series.
+        self._ref_queue = [str(e) for e in ref_eps] or ["1"]
+        self.ref_ep = self._ref_queue[0]
         self._decoder = None
         self._samples_cur = None
         self._fp_ref = None
         base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         root = Path(base) if base else Path.home() / ".animesaturn_downloader"
         self._dir = root / "intro_cache"
-        self._results = self._dir / "results.json"
-        self._reffp = self._dir / f"{sanitize_name(str(slug))}.npy"
+        # "-v2": the fingerprint switched to temporal deltas; results/refs computed with
+        # the old spectral-shape fingerprint must not be reused.
+        self._results = self._dir / "results-v2.json"
+        self._reffp = self._dir / f"{sanitize_name(str(slug))}.v2.npy"
 
     # ------------------------------------------------------------------ #
     def _load(self) -> dict:
@@ -194,7 +208,9 @@ class IntroDetector(QObject):
         if cached:  # already detected this episode
             self.detected.emit(int(cached[0]), int(cached[1]))
             return
-        if self._reffp.exists() and str(entry.get("ref_ep")) == self.ref_ep:
+        # A cached reference is only ever written when it actually produced an opening,
+        # so it can be reused for the series regardless of which episode it came from.
+        if self._reffp.exists():
             try:
                 self._fp_ref = np.load(self._reffp)
             except (OSError, ValueError):
@@ -206,20 +222,28 @@ class IntroDetector(QObject):
         if self._fp_ref is not None:
             self._match(samples, None, self._fp_ref)
         else:
-            worker = ResolveWorker(
-                self.client, object(), f"/anime/{self.slug}/ep-{self.ref_ep}"
-            )
-            # Bound methods (not lambdas) so the slot runs queued on THIS (main) thread:
-            # QAudioDecoder must be created/used on the thread with the event loop.
-            worker.signals.done.connect(self._on_ref_resolved)
-            worker.signals.error.connect(self._on_ref_error)
-            QThreadPool.globalInstance().start(worker)
+            self._try_next_ref()
+
+    def _try_next_ref(self) -> None:
+        """Fetch the next reference candidate, or give up once they are exhausted."""
+        if not self._ref_queue:
+            self._finish(0, 0, None)
+            return
+        self.ref_ep = self._ref_queue.pop(0)
+        worker = ResolveWorker(
+            self.client, object(), f"/anime/{self.slug}/ep-{self.ref_ep}"
+        )
+        # Bound methods (not lambdas) so the slot runs queued on THIS (main) thread:
+        # QAudioDecoder must be created/used on the thread with the event loop.
+        worker.signals.done.connect(self._on_ref_resolved)
+        worker.signals.error.connect(self._on_ref_error)
+        QThreadPool.globalInstance().start(worker)
 
     def _on_ref_resolved(self, _token, url) -> None:
         self._decode(url, self._on_ref)
 
     def _on_ref_error(self, *_args) -> None:
-        self.detected.emit(0, 0)
+        self._try_next_ref()  # one unplayable episode must not end detection
 
     def _on_ref(self, samples) -> None:
         self._match(self._samples_cur, samples, None)
@@ -231,12 +255,22 @@ class IntroDetector(QObject):
 
     def _on_matched(self, result) -> None:
         start, end, fp_ref = result
+        if end <= 0 and self._fp_ref is None and self._ref_queue:
+            # This reference shares no opening with the episode; try the next candidate
+            # rather than reporting failure for the whole series.
+            self._try_next_ref()
+            return
+        self._finish(start, end, fp_ref)
+
+    def _finish(self, start: int, end: int, fp_ref) -> None:
         data = self._load()
         entry = data.setdefault(self.slug, {"ref_ep": self.ref_ep, "eps": {}})
         entry["ref_ep"] = self.ref_ep
         entry.setdefault("eps", {})[self.cur_ep] = [int(start), int(end)]
         self._save(data)
-        if fp_ref is not None and not self._reffp.exists():
+        # Only cache a reference that actually produced an opening. Caching one that
+        # matched nothing would pin the whole series to a useless reference for good.
+        if end > 0 and fp_ref is not None and not self._reffp.exists():
             try:
                 self._dir.mkdir(parents=True, exist_ok=True)
                 np.save(self._reffp, fp_ref)

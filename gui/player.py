@@ -588,6 +588,25 @@ class PlayerWindow(QDialog):
         if token is self._token and extra_start > 0:
             self._extra_start = extra_start
 
+    def _ref_candidates(self, current: int) -> list[int]:
+        """Episodes to fingerprint the opening against, nearest first.
+
+        Episode 1 is deliberately last: premieres often carry no standard opening, and
+        on a real series it matched none of the other episodes, which silently disabled
+        detection for the whole show. Two candidates keep the cost bounded.
+        """
+        picks: list[int] = []
+        for number in (current - 1, current + 1, current - 2, current + 2, current + 3):
+            if number == current or number < 2:
+                continue
+            if self.total and number > self.total:
+                continue
+            if number not in picks:
+                picks.append(number)
+        if not picks:  # very short series: episode 1 is all we have
+            picks = [n for n in (1, 2) if n != current and (not self.total or n <= self.total)]
+        return picks[:2]
+
     def _start_intro_detection(self) -> None:
         """Locate the opening precisely by fingerprinting against another episode."""
         if not self.slug or not self._media_url:
@@ -596,9 +615,9 @@ class PlayerWindow(QDialog):
             current = int(str(self.episode.number))
         except (TypeError, ValueError):
             return
-        ref = 1 if current != 1 else 2
         detector = IntroDetector(
-            self.client, self.slug, current, self._media_url, ref, self
+            self.client, self.slug, current, self._media_url,
+            self._ref_candidates(current), self,
         )
         self._intro_det = detector
         token = self._token
