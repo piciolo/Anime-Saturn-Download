@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSlider,
+    QStyle,
+    QStyleOptionSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -62,6 +64,62 @@ def _fmt(ms: int) -> str:
     h, rem = divmod(total, 3600)
     m, s = divmod(rem, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+class SeekSlider(QSlider):
+    """Horizontal slider that jumps straight to a clicked point (click-to-seek).
+
+    A plain QSlider only steps one page toward a click on the groove, so clicking a spot
+    on the progress bar does not go there. Here a click anywhere moves the handle exactly
+    to that point and begins a drag, reusing the sliderPressed/Moved/Released signals the
+    player already listens to, so playback seeks to precisely where the user clicked.
+    """
+
+    def _value_at(self, pos: float) -> int:
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        groove = self.style().subControlRect(
+            QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self
+        )
+        handle = self.style().subControlRect(
+            QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self
+        )
+        span = groove.right() - handle.width() + 1 - groove.x()
+        if span <= 0:
+            return self.minimum()
+        return QStyle.sliderValueFromPosition(
+            self.minimum(),
+            self.maximum(),
+            int(pos) - groove.x(),
+            span,
+            opt.upsideDown,
+        )
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self.maximum() > self.minimum():
+            self.setSliderDown(True)  # emits sliderPressed -> the player begins seeking
+            value = self._value_at(event.position().x())
+            self.setValue(value)
+            self.sliderMoved.emit(value)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self.isSliderDown() and self.maximum() > self.minimum():
+            value = self._value_at(event.position().x())
+            self.setValue(value)
+            self.sliderMoved.emit(value)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self.isSliderDown():
+            self.setSliderDown(False)  # emits sliderReleased -> the player commits the seek
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
 
 # Skip-intro: show the button through this early window (wide enough to cover a cold
@@ -338,7 +396,7 @@ class PlayerWindow(QDialog):
 
         seek_row = QHBoxLayout()
         seek_row.setSpacing(10)
-        self.position_slider = QSlider(Qt.Horizontal)
+        self.position_slider = SeekSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
         seek_row.addWidget(self.position_slider, 1)
         self.time_label = QLabel("00:00 / 00:00")
@@ -392,6 +450,7 @@ class PlayerWindow(QDialog):
         self.volume_slider.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
         self.position_slider.sliderPressed.connect(self._begin_seek)
         self.position_slider.sliderReleased.connect(self._end_seek)
+        self.position_slider.sliderMoved.connect(self._on_seek_preview)
         self.player.positionChanged.connect(self._on_position)
         self.player.durationChanged.connect(self._on_duration)
         self.player.seekableChanged.connect(lambda *_: self._maybe_resume())
@@ -652,6 +711,10 @@ class PlayerWindow(QDialog):
 
     def _begin_seek(self) -> None:
         self._seeking = True
+
+    def _on_seek_preview(self, value: int) -> None:
+        # Show the target time while dragging/clicking, before the seek is committed.
+        self.time_label.setText(f"{_fmt(value)} / {_fmt(self.player.duration())}")
 
     def _end_seek(self) -> None:
         self._seeking = False
