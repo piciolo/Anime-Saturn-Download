@@ -412,6 +412,14 @@ class PlayerWindow(QDialog):
         self.play_button.setToolTip("Play/Pausa (Spazio)")
         controls.addWidget(self.play_button)
 
+        # Always-available "next episode" control (unlike the video overlay, which only
+        # appears near the end). Hidden when there is no next episode.
+        self.next_button = QPushButton("⏭  Episodio successivo")
+        self.next_button.setObjectName("Ghost")
+        self.next_button.setToolTip("Vai all'episodio successivo")
+        self.next_button.setVisible(self._has_next())
+        controls.addWidget(self.next_button)
+
         controls.addWidget(QLabel("🔊"))
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
@@ -444,6 +452,7 @@ class PlayerWindow(QDialog):
 
     def _connect(self) -> None:
         self.play_button.clicked.connect(self._toggle_play)
+        self.next_button.clicked.connect(self._go_next)
         self.fullscreen_button.clicked.connect(self._toggle_fullscreen)
         self.external_button.clicked.connect(self._open_external)
         self.download_button.clicked.connect(self._request_download)
@@ -533,6 +542,7 @@ class PlayerWindow(QDialog):
         self.download_button.setText("⬇  Scarica")
         self.download_button.setEnabled(True)
         self.external_button.setEnabled(bool(local_path))
+        self.next_button.setVisible(self._has_next())
         self.status.setText("Caricamento…")
         self.status.show()
         self.position_slider.setRange(0, 0)
@@ -568,6 +578,11 @@ class PlayerWindow(QDialog):
         except (TypeError, ValueError):
             return False
         return not self.total or current + 1 <= self.total
+
+    def _go_next(self) -> None:
+        """Load the next episode now (the static bar button)."""
+        if self._has_next():
+            self.ended.emit()  # same path as the video overlay / auto-advance
 
     def _update_overlay(self, position: int) -> None:
         duration = self.player.duration()
