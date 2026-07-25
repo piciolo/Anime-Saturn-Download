@@ -1176,6 +1176,7 @@ class MainWindow(QMainWindow):
             lambda pos, dur, fin, w=window: self._on_player_progress(w, pos, dur, fin)
         )
         window.ended.connect(lambda w=window: self._advance_player(w))
+        window.previous_requested.connect(lambda w=window: self._change_episode(w, -1))
         window.finished.connect(lambda _r, w=window: self._on_player_closed(w))
         self._players.add(window)
         window.show()
@@ -1200,13 +1201,20 @@ class MainWindow(QMainWindow):
 
     def _advance_player(self, player) -> None:
         """When an episode ends, auto-play the next one in the same window."""
+        self._change_episode(player, 1)
+
+    def _change_episode(self, player, delta: int) -> None:
+        """Load the episode ``delta`` steps away (next/previous) in the same window."""
         try:
             current = int(str(player.episode.number))
         except (TypeError, ValueError):
             return
-        if player.total and current + 1 > player.total:
+        target = current + delta
+        if target < 1:
+            return  # already at the first episode
+        if player.total and target > player.total:
             return  # last episode: nothing to advance to
-        number = str(current + 1)
+        number = str(target)
         watch = player.episode.watch_path
         if "/ep-" in watch:
             watch = watch.rsplit("/ep-", 1)[0] + f"/ep-{number}"

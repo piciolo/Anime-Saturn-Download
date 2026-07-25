@@ -251,7 +251,8 @@ class PlayerWindow(QDialog):
 
     download_requested = Signal(str, object)     # anime_title, Episode
     progress = Signal(int, int, bool)            # position_ms, duration_ms, finished
-    ended = Signal()                             # reached the end of the episode
+    ended = Signal()                             # reached the end / go to the next episode
+    previous_requested = Signal()                # go to the previous episode
 
     def __init__(
         self,
@@ -406,14 +407,21 @@ class PlayerWindow(QDialog):
 
         controls = QHBoxLayout()
         controls.setSpacing(8)
+        # Episode controls, grouped as: previous | play/pause | next. The prev/next
+        # buttons stay in the bar (unlike the video overlay, which only shows near the
+        # end); each is hidden when there is no such episode.
+        self.prev_button = QPushButton("⏮  Episodio precedente")
+        self.prev_button.setObjectName("Ghost")
+        self.prev_button.setToolTip("Vai all'episodio precedente")
+        self.prev_button.setVisible(self._has_prev())
+        controls.addWidget(self.prev_button)
+
         self.play_button = QPushButton("⏸")
         self.play_button.setObjectName("Ghost")
         self.play_button.setFixedWidth(48)
         self.play_button.setToolTip("Play/Pausa (Spazio)")
         controls.addWidget(self.play_button)
 
-        # Always-available "next episode" control (unlike the video overlay, which only
-        # appears near the end). Hidden when there is no next episode.
         self.next_button = QPushButton("⏭  Episodio successivo")
         self.next_button.setObjectName("Ghost")
         self.next_button.setToolTip("Vai all'episodio successivo")
@@ -452,6 +460,7 @@ class PlayerWindow(QDialog):
 
     def _connect(self) -> None:
         self.play_button.clicked.connect(self._toggle_play)
+        self.prev_button.clicked.connect(self._go_prev)
         self.next_button.clicked.connect(self._go_next)
         self.fullscreen_button.clicked.connect(self._toggle_fullscreen)
         self.external_button.clicked.connect(self._open_external)
@@ -542,6 +551,7 @@ class PlayerWindow(QDialog):
         self.download_button.setText("⬇  Scarica")
         self.download_button.setEnabled(True)
         self.external_button.setEnabled(bool(local_path))
+        self.prev_button.setVisible(self._has_prev())
         self.next_button.setVisible(self._has_next())
         self.status.setText("Caricamento…")
         self.status.show()
@@ -579,10 +589,22 @@ class PlayerWindow(QDialog):
             return False
         return not self.total or current + 1 <= self.total
 
+    def _has_prev(self) -> bool:
+        try:
+            current = int(str(self.episode.number))
+        except (TypeError, ValueError):
+            return False
+        return current > 1
+
     def _go_next(self) -> None:
         """Load the next episode now (the static bar button)."""
         if self._has_next():
             self.ended.emit()  # same path as the video overlay / auto-advance
+
+    def _go_prev(self) -> None:
+        """Load the previous episode now (the static bar button)."""
+        if self._has_prev():
+            self.previous_requested.emit()
 
     def _update_overlay(self, position: int) -> None:
         duration = self.player.duration()
