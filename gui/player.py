@@ -11,8 +11,14 @@ import os
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, Qt, QUrl, Signal, QTimer
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QSize, Qt, QUrl, Signal, QTimer
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QKeySequence,
+    QPainter,
+    QShortcut,
+)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -23,12 +29,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSlider,
-    QStyle,
-    QStyleOptionSlider,
     QVBoxLayout,
     QWidget,
 )
 
+from .icons import icon
 from .introdetect import IntroDetector
 from .models import Episode
 from .net import AnimeSaturnClient
@@ -67,33 +72,86 @@ def _fmt(ms: int) -> str:
 
 
 class SeekSlider(QSlider):
-    """Horizontal slider that jumps straight to a clicked point (click-to-seek).
+    """Custom-painted progress bar: click-to-seek, a hover handle, and a sigla marker.
 
-    A plain QSlider only steps one page toward a click on the groove, so clicking a spot
-    on the progress bar does not go there. Here a click anywhere moves the handle exactly
-    to that point and begins a drag, reusing the sliderPressed/Moved/Released signals the
-    player already listens to, so playback seeks to precisely where the user clicked.
+    A plain QSlider only steps one page toward a click and shows a static handle. This one
+    is painted by hand so a click anywhere seeks to that exact point, the track thickens
+    and grows an accent handle on hover, and the detected opening ("sigla") is drawn as an
+    amber band so the user can see and reach it. It reuses the sliderPressed/Moved/Released
+    signals the player already listens to.
     """
 
+    HANDLE_R = 8  # geometry radius reserved at each end for the handle
+
+    def __init__(self, orientation, parent=None) -> None:
+        super().__init__(orientation, parent)
+        self._hover = False
+        self._op_start = 0
+        self._op_end = 0
+        self.setFixedHeight(22)
+
+    def set_opening(self, start_ms: int, end_ms: int) -> None:
+        """Mark the detected opening so it shows as a band on the bar (0,0 clears it)."""
+        self._op_start, self._op_end = int(start_ms), int(end_ms)
+        self.update()
+
+    def enterEvent(self, event) -> None:
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def _span(self) -> tuple[float, float]:
+        left = float(self.HANDLE_R)
+        return left, max(1.0, self.width() - 2 * self.HANDLE_R)
+
+    def _x_of(self, value: int) -> float:
+        left, span = self._span()
+        rng = self.maximum() - self.minimum()
+        if rng <= 0:
+            return left
+        return left + (value - self.minimum()) / rng * span
+
     def _value_at(self, pos: float) -> int:
-        opt = QStyleOptionSlider()
-        self.initStyleOption(opt)
-        groove = self.style().subControlRect(
-            QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self
-        )
-        handle = self.style().subControlRect(
-            QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self
-        )
-        span = groove.right() - handle.width() + 1 - groove.x()
-        if span <= 0:
-            return self.minimum()
-        return QStyle.sliderValueFromPosition(
-            self.minimum(),
-            self.maximum(),
-            int(pos) - groove.x(),
-            span,
-            opt.upsideDown,
-        )
+        left, span = self._span()
+        frac = max(0.0, min(1.0, (pos - left) / span))
+        return round(self.minimum() + frac * (self.maximum() - self.minimum()))
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        h = self.height()
+        cy = h / 2
+        left, span = self._span()
+        active = self._hover or self.isSliderDown()
+        th = 6.0 if active else 4.0
+
+        def bar(x0: float, x1: float, color: QColor, pad: float = 0.0) -> None:
+            r = (th + 2 * pad) / 2
+            painter.setBrush(color)
+            painter.drawRoundedRect(QRectF(x0, cy - th / 2 - pad, max(0.0, x1 - x0), th + 2 * pad), r, r)
+
+        bar(left, left + span, QColor(255, 255, 255, 38))  # groove
+        has_media = self.maximum() > self.minimum()
+        if has_media and self._op_end > self._op_start >= 0:
+            x0 = self._x_of(self._op_start)
+            x1 = max(x0 + 2, self._x_of(self._op_end))
+            bar(x0, x1, QColor(245, 183, 77, 150))  # sigla band (amber)
+        if has_media:
+            xv = self._x_of(self.value())
+            if active:
+                bar(left, xv, QColor(124, 92, 255, 70), pad=1.5)  # glow
+            bar(left, xv, QColor(124, 92, 255))  # played (accent)
+            if active:
+                painter.setBrush(QColor(124, 92, 255, 90))
+                painter.drawEllipse(QPointF(xv, cy), self.HANDLE_R + 3, self.HANDLE_R + 3)
+                painter.setBrush(QColor(255, 255, 255))
+                painter.drawEllipse(QPointF(xv, cy), self.HANDLE_R, self.HANDLE_R)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton and self.maximum() > self.minimum():
@@ -396,68 +454,76 @@ class PlayerWindow(QDialog):
         bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(10)
 
-        seek_row = QHBoxLayout()
-        seek_row.setSpacing(10)
         self.position_slider = SeekSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
-        seek_row.addWidget(self.position_slider, 1)
-        self.time_label = QLabel("00:00 / 00:00")
-        self.time_label.setObjectName("Muted")
-        seek_row.addWidget(self.time_label)
-        bar.addLayout(seek_row)
+        bar.addWidget(self.position_slider)
 
         controls = QHBoxLayout()
-        controls.setSpacing(8)
-        # Episode controls, grouped as: previous | play/pause | next. The prev/next
-        # buttons stay in the bar (unlike the video overlay, which only shows near the
-        # end); each is hidden when there is no such episode.
-        self.prev_button = QPushButton("⏮  Episodio precedente")
-        self.prev_button.setObjectName("Ghost")
-        self.prev_button.setToolTip("Vai all'episodio precedente")
+        controls.setSpacing(6)
+
+        # Episode controls, grouped as: previous | play/pause | next. Icon-only (the
+        # video overlay covers the "near the end" case); each hides when there is no
+        # such episode.
+        self.prev_button = self._icon_button("prev", "Episodio precedente")
         self.prev_button.setVisible(self._has_prev())
         controls.addWidget(self.prev_button)
 
-        self.play_button = QPushButton("⏸")
-        self.play_button.setObjectName("Ghost")
-        self.play_button.setFixedWidth(48)
-        self.play_button.setToolTip("Play/Pausa (Spazio)")
+        self.play_button = self._icon_button("pause", "Play/Pausa (Spazio)", accent=True)
         controls.addWidget(self.play_button)
 
-        self.next_button = QPushButton("⏭  Episodio successivo")
-        self.next_button.setObjectName("Ghost")
-        self.next_button.setToolTip("Vai all'episodio successivo")
+        self.next_button = self._icon_button("next", "Episodio successivo")
         self.next_button.setVisible(self._has_next())
         controls.addWidget(self.next_button)
 
-        controls.addWidget(QLabel("🔊"))
+        controls.addSpacing(6)
+        vol_icon = QLabel()
+        vol_icon.setPixmap(icon("volume", "#9aa0b4", 18).pixmap(18, 18))
+        controls.addWidget(vol_icon)
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(80)
-        self.volume_slider.setFixedWidth(120)
+        self.volume_slider.setFixedWidth(96)
         controls.addWidget(self.volume_slider)
+
+        self.time_label = QLabel("00:00 / 00:00")
+        self.time_label.setObjectName("TimeLabel")
+        controls.addSpacing(6)
+        controls.addWidget(self.time_label)
 
         self.where_label = QLabel(where)
         self.where_label.setObjectName("Muted")
-        controls.addSpacing(8)
+        controls.addSpacing(10)
         controls.addWidget(self.where_label)
         controls.addStretch(1)
 
-        self.external_button = QPushButton("↗  Apri esternamente")
-        self.external_button.setObjectName("Ghost")
+        self.external_button = self._icon_button("external", "Apri esternamente")
         self.external_button.setEnabled(bool(self.local_path))
         controls.addWidget(self.external_button)
 
-        self.fullscreen_button = QPushButton("⛶  Schermo intero")
-        self.fullscreen_button.setObjectName("Ghost")
+        self.fullscreen_button = self._icon_button("fullscreen", "Schermo intero")
         controls.addWidget(self.fullscreen_button)
 
         # A downloaded file is already local, so only offer download for streams.
-        self.download_button = QPushButton("⬇  Scarica")
+        self.download_button = QPushButton("  Scarica")
         self.download_button.setObjectName("Primary")
+        self.download_button.setIcon(icon("download", "#ffffff", 18))
+        self.download_button.setIconSize(QSize(18, 18))
         self.download_button.setVisible(not self.local_path)
+        controls.addSpacing(4)
         controls.addWidget(self.download_button)
         bar.addLayout(controls)
         layout.addWidget(self.controls_bar)
+
+    def _icon_button(self, kind: str, tooltip: str, accent: bool = False) -> QPushButton:
+        """A flat, square icon button (accent-filled for the primary play control)."""
+        button = QPushButton()
+        button.setIcon(icon(kind, "#ffffff" if accent else "#e8e9f0", 22))
+        button.setIconSize(QSize(24 if accent else 20, 24 if accent else 20))
+        button.setObjectName("PlayCta" if accent else "IconBtn")
+        button.setFixedSize(46 if accent else 38, 46 if accent else 38)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setToolTip(tooltip)
+        return button
 
     def _connect(self) -> None:
         self.play_button.clicked.connect(self._toggle_play)
@@ -542,6 +608,7 @@ class PlayerWindow(QDialog):
         self._extra_start = 0
         self._op_start = 0
         self._op_end = 0
+        self.position_slider.set_opening(0, 0)  # clear the sigla band for the new episode
         self._overlay_mode = None
         self._probe_started = False
         self._recovering = False
@@ -559,7 +626,7 @@ class PlayerWindow(QDialog):
         prefix = "▶" if local_path else "Anteprima ·"
         self.setWindowTitle(f"{prefix} {self.anime_title} — {where}")
         self.download_button.setVisible(not local_path)
-        self.download_button.setText("⬇  Scarica")
+        self.download_button.setText("  Scarica")
         self.download_button.setEnabled(True)
         self.external_button.setEnabled(bool(local_path))
         self.prev_button.setVisible(self._has_prev())
@@ -736,6 +803,7 @@ class PlayerWindow(QDialog):
         if token is self._token and end_ms > 0:
             self._op_start = start_ms
             self._op_end = end_ms
+            self.position_slider.set_opening(start_ms, end_ms)  # show the sigla band
 
     # ------------------------------------------------------------------ #
     # Progress reporting
@@ -797,7 +865,8 @@ class PlayerWindow(QDialog):
         self._maybe_resume()
 
     def _on_state(self, state: QMediaPlayer.PlaybackState) -> None:
-        self.play_button.setText("⏸" if state == QMediaPlayer.PlayingState else "▶")
+        playing = state == QMediaPlayer.PlayingState
+        self.play_button.setIcon(icon("pause" if playing else "play", "#ffffff", 22))
         if state == QMediaPlayer.PlayingState:
             self._save_timer.start()
         else:
@@ -914,7 +983,8 @@ class PlayerWindow(QDialog):
             self.showFullScreen()
             self.raise_()
             self.activateWindow()
-            self.fullscreen_button.setText("⤢  Riduci")
+            self.fullscreen_button.setIcon(icon("fullscreen_exit", "#e8e9f0", 22))
+            self.fullscreen_button.setToolTip("Riduci")
             self._hide_timer.start()  # fade to an immersive, video-only view
         else:
             self._hide_timer.stop()
@@ -922,7 +992,8 @@ class PlayerWindow(QDialog):
             self.unsetCursor()
             self.video.unsetCursor()
             self.showNormal()
-            self.fullscreen_button.setText("⛶  Schermo intero")
+            self.fullscreen_button.setIcon(icon("fullscreen", "#e8e9f0", 22))
+            self.fullscreen_button.setToolTip("Schermo intero")
 
     def _open_external(self) -> None:
         if self._media_url:

@@ -220,6 +220,21 @@ QProgressBar::chunk {{
 /* Preview player (dialog + seek/volume sliders) */
 QDialog {{ background: {BG}; }}
 QDialog#Player {{ background: {BG}; }}
+QPushButton#IconBtn {{
+    background: transparent;
+    border: none;
+    border-radius: 10px;
+}}
+QPushButton#IconBtn:hover {{ background: rgba(255, 255, 255, 0.09); }}
+QPushButton#IconBtn:pressed {{ background: rgba(255, 255, 255, 0.05); }}
+QPushButton#PlayCta {{
+    background: {ACCENT};
+    border: none;
+    border-radius: 13px;
+}}
+QPushButton#PlayCta:hover {{ background: {ACCENT_HOVER}; }}
+QPushButton#PlayCta:pressed {{ background: {ACCENT_PRESSED}; }}
+QLabel#TimeLabel {{ color: {TEXT}; font-size: 12px; }}
 QSlider::groove:horizontal {{
     height: 5px;
     background: {BORDER};
