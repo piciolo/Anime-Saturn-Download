@@ -567,6 +567,12 @@ class PlayerWindow(QDialog):
             shortcut = QShortcut(QKeySequence(*keys), self)
             shortcut.activated.connect(lambda d=delta: self._seek_relative(d))
 
+        # Space always toggles play/pause, whatever has focus. A focused button would
+        # otherwise consume Space and click itself; a WindowShortcut intercepts it first.
+        self._space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self._space_shortcut.setContext(Qt.WindowShortcut)
+        self._space_shortcut.activated.connect(self._toggle_play)
+
     # ------------------------------------------------------------------ #
     # Source / resume
     # ------------------------------------------------------------------ #
@@ -1062,11 +1068,10 @@ class PlayerWindow(QDialog):
             self._hide_timer.start()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # Space (play/pause) and the arrow keys (seek) are handled by window shortcuts so
+        # they work regardless of focus; only Escape-to-exit-fullscreen is left here.
         if event.key() == Qt.Key_Escape and self.isFullScreen():
             self._set_fullscreen(False)
-            return
-        if event.key() == Qt.Key_Space:
-            self._toggle_play()
             return
         super().keyPressEvent(event)
 
