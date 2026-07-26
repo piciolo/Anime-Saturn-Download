@@ -53,6 +53,7 @@ from .widgets import AnimeCard, DownloadRow, MultiSelectDropdown, human_size
 from .workers import (
     DownloadTask,
     EpisodesWorker,
+    GenresWorker,
     PosterWorker,
     SearchWorker,
     SuggestWorker,
@@ -153,6 +154,7 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_catalog_tab(), "Catalogo")
+        self._genres_tab_index = self.tabs.addTab(self._build_genres_tab(), "Generi")
         self._continue_tab_index = self.tabs.addTab(
             self._build_continue_tab(), "▶  Continua"
         )
@@ -487,6 +489,102 @@ class MainWindow(QMainWindow):
         return page
 
     # ------------------------------------------------------------------ #
+    # Genres tab (mirrors the site's /genres page)
+    # ------------------------------------------------------------------ #
+    def _build_genres_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setSpacing(8)
+
+        intro = QLabel(
+            "Esplora il catalogo per genere. Scegli una categoria per vedere tutti i titoli."
+        )
+        intro.setObjectName("Muted")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.genres_status = QLabel("")
+        self.genres_status.setObjectName("Muted")
+        layout.addWidget(self.genres_status)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        self.genres_grid = FlowLayout(container, margin=2, h_spacing=14, v_spacing=14)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+        self._genres_loaded = False
+        return page
+
+    def _refresh_genres(self) -> None:
+        if self._genres_loaded:
+            return  # loaded once per session; the genre list is stable
+        self.genres_status.setText("Caricamento generi…")
+        worker = GenresWorker(self.client)
+        worker.signals.results.connect(self._on_genres_results)
+        worker.signals.error.connect(self._on_genres_error)
+        self.io_pool.start(worker)
+
+    def _on_genres_results(self, genres: list) -> None:
+        self._genres_loaded = True
+        _clear_layout(self.genres_grid)
+        for genre in genres:
+            self.genres_grid.addWidget(self._genre_card(genre))
+        self.genres_status.setText(f"{len(genres)} generi")
+
+    def _on_genres_error(self, message: str) -> None:
+        self._genres_loaded = False
+        self.genres_status.setText(f"Impossibile caricare i generi.\n{message}")
+
+    def _genre_card(self, genre: dict) -> QWidget:
+        card = QFrame()
+        card.setObjectName("Card")
+        card.setCursor(Qt.PointingHandCursor)
+        card.setFixedSize(232, 124)  # uniform tiles; stops the flow layout stretching one
+        inner = QVBoxLayout(card)
+        inner.setContentsMargins(15, 12, 15, 12)
+        inner.setSpacing(6)
+
+        top = QHBoxLayout()
+        name = QLabel(genre.get("name", ""))
+        name.setObjectName("CardTitle")
+        top.addWidget(name)
+        top.addStretch(1)
+        count = QLabel(f"{genre.get('count', 0):,}".replace(",", "."))
+        count.setObjectName("Badge")
+        top.addWidget(count, 0, Qt.AlignTop)
+        inner.addLayout(top)
+
+        desc = QLabel(genre.get("description", ""))
+        desc.setObjectName("Muted")
+        desc.setWordWrap(True)
+        desc.setAlignment(Qt.AlignTop)
+        inner.addWidget(desc)
+        inner.addStretch(1)
+
+        cid = genre.get("category_id", "")
+        label = genre.get("name", "")
+        card.mousePressEvent = lambda _e, c=cid, n=label: self._open_genre(c, n)
+        return card
+
+    def _open_genre(self, category_id: str, name: str) -> None:
+        """Browse all titles in a genre — a /filter query on that category."""
+        if not category_id:
+            return
+        self.search_input.clear()
+        for dropdown in self.filter_combos.values():
+            dropdown.clear()
+        self._update_filter_toggle_text()
+        self.tabs.setCurrentIndex(0)  # switch to the Catalogo tab to show results
+        self._start_query(
+            title="",
+            sort="standard",
+            dub=self.dub_combo.currentData(),
+            filters={"category": [category_id]},
+        )
+        self.status_label.setText(f"Genere: {name} · caricamento…")
+
+    # ------------------------------------------------------------------ #
     # Continue watching + Library tabs
     # ------------------------------------------------------------------ #
     def _build_continue_tab(self) -> QWidget:
@@ -568,7 +666,9 @@ class MainWindow(QMainWindow):
         return page
 
     def _on_tab_changed(self, index: int) -> None:
-        if index == self._continue_tab_index:
+        if index == self._genres_tab_index:
+            self._refresh_genres()
+        elif index == self._continue_tab_index:
             self._refresh_continue()
         elif index == self._library_tab_index:
             self._refresh_library()

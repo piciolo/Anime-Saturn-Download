@@ -192,6 +192,15 @@ _PLOT_RE = re.compile(
 )
 _GENRE_RE = re.compile(r'href="/filter\?categories=\d+"[^>]*>([^<]+)<', re.I)
 
+# The /genres page renders one server-side card per genre; scrape name/count/description.
+_GENRE_CARD_RE = re.compile(
+    r'href="/filter\?categories=(\d+)"[^>]*class="genre-card[^"]*"[^>]*>(.*?)</a>',
+    re.I | re.S,
+)
+_GC_NAME_RE = re.compile(r'genre-card__name">([^<]+)<', re.I)
+_GC_COUNT_RE = re.compile(r'genre-card__count">([^<]*)<', re.I)
+_GC_DESC_RE = re.compile(r'genre-card__desc">([^<]*)<', re.I)
+
 # --- Video resolution -------------------------------------------------------- #
 # The signed embed URL, tolerant of HTML-entity / JSON escaping (normalised first).
 _EMBED_RE = re.compile(
@@ -399,6 +408,34 @@ class AnimeSaturnClient:
         genres = [_clean(g) for g in _GENRE_RE.findall(page_html)]
 
         return {"episodes": episodes, "plot": plot, "genres": genres}
+
+    def fetch_genres(self) -> list[dict]:
+        """Scrape the /genres page as the site shows it.
+
+        Returns one dict per genre — ``{"name", "category_id", "count", "description"}`` —
+        so the app can present the same browsable genre grid. Browsing a genre is a
+        ``/filter`` query with ``category=[category_id]``.
+        """
+        response = self._client.get(f"{self.base_url}/genres", headers=_HTML_HEADERS)
+        response.raise_for_status()
+        html = response.text
+        genres: list[dict] = []
+        for category_id, inner in _GENRE_CARD_RE.findall(html):
+            name_match = _GC_NAME_RE.search(inner)
+            if not name_match:
+                continue
+            count_match = _GC_COUNT_RE.search(inner)
+            desc_match = _GC_DESC_RE.search(inner)
+            count = int(re.sub(r"\D", "", count_match.group(1)) or "0") if count_match else 0
+            genres.append(
+                {
+                    "name": _clean(name_match.group(1)),
+                    "category_id": category_id,
+                    "count": count,
+                    "description": _clean(desc_match.group(1)) if desc_match else "",
+                }
+            )
+        return genres
 
     # ------------------------------------------------------------------ #
     # Download-link resolution

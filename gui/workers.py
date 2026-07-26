@@ -60,6 +60,26 @@ class SearchWorker(QRunnable):
             self.signals.error.emit(self.token, str(exc))
 
 
+class GenresSignals(QObject):
+    results = Signal(list)  # list[dict] of genres
+    error = Signal(str)
+
+
+class GenresWorker(QRunnable):
+    """Fetch the genre catalogue (from /genres) off the UI thread."""
+
+    def __init__(self, client: AnimeSaturnClient) -> None:
+        super().__init__()
+        self.client = client
+        self.signals = GenresSignals()
+
+    def run(self) -> None:
+        try:
+            self.signals.results.emit(self.client.fetch_genres())
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            self.signals.error.emit(str(exc))
+
+
 class EpisodesSignals(QObject):
     results = Signal(object, list, str)  # anime_key, list[Episode], plot
     error = Signal(object, str)
