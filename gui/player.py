@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, Qt, QUrl, Signal, QTimer
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -127,6 +127,7 @@ class SeekSlider(QSlider):
 INTRO_START_MS = 8_000
 INTRO_END_MS = 300_000
 INTRO_SKIP_MS = 85_000
+SEEK_STEP_MS = 10_000        # arrow-key jump: 10 s back/forward
 # Background analysis competes with playback for bandwidth, so keep it out of the way:
 # the post-credits probe (a second player + a burst of seeks) only runs near the end, and
 # fingerprinting waits for the playback buffer to fill first.
@@ -477,6 +478,16 @@ class PlayerWindow(QDialog):
         self.player.errorOccurred.connect(self._on_error)
         self.video.installEventFilter(self)
 
+        # Arrow keys seek 10 s. Shortcuts (not keyPressEvent) so they work regardless of
+        # which widget has focus - a focused slider/button would otherwise eat the arrows -
+        # and in both windowed and fullscreen mode.
+        for keys, delta in (
+            ((Qt.Key_Right,), SEEK_STEP_MS),
+            ((Qt.Key_Left,), -SEEK_STEP_MS),
+        ):
+            shortcut = QShortcut(QKeySequence(*keys), self)
+            shortcut.activated.connect(lambda d=delta: self._seek_relative(d))
+
     # ------------------------------------------------------------------ #
     # Source / resume
     # ------------------------------------------------------------------ #
@@ -752,6 +763,18 @@ class PlayerWindow(QDialog):
     def _on_seek_preview(self, value: int) -> None:
         # Show the target time while dragging/clicking, before the seek is committed.
         self.time_label.setText(f"{_fmt(value)} / {_fmt(self.player.duration())}")
+
+    def _seek_relative(self, delta_ms: int) -> None:
+        """Jump ``delta_ms`` from the current position (arrow keys), clamped to the media."""
+        duration = self.player.duration()
+        if duration <= 0 or not self.player.isSeekable():
+            return
+        self._resumed = True  # an explicit seek supersedes any pending auto-resume
+        target = max(0, min(self.player.position() + delta_ms, duration))
+        self.player.setPosition(target)
+        self.position_slider.setValue(target)
+        self._on_seek_preview(target)
+        self._reveal_controls()  # give visible feedback, esp. in fullscreen
 
     def _end_seek(self) -> None:
         self._seeking = False
