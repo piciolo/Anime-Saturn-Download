@@ -8,6 +8,7 @@ Stored as a small JSON file in the user's app-data folder.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
@@ -35,7 +36,6 @@ class WatchHistory:
         self._dir = Path(base) if base else (Path.home() / ".animesaturn_downloader")
         self._path = self._dir / "history.json"
         self._data: dict[str, dict] = self._load()
-        self._clock = 0.0  # monotonically bumped stamp (avoids depending on wall clock)
 
     # ------------------------------------------------------------------ #
     def _load(self) -> dict[str, dict]:
@@ -58,8 +58,10 @@ class WatchHistory:
         return sanitize_name(title)
 
     def _stamp(self) -> float:
-        self._clock += 1.0
-        return self._clock
+        # Wall-clock time so ordering is correct across sessions: whatever you just
+        # watched always sorts above entries from previous runs. (The old per-session
+        # counter reset to 0 each launch, burying the most recent anime at the bottom.)
+        return time.time()
 
     # ------------------------------------------------------------------ #
     def record(

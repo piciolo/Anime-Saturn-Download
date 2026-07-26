@@ -436,11 +436,12 @@ class PlayerWindow(QDialog):
         self.overlay_button.setAttribute(Qt.WA_ShowWithoutActivating)
         self.overlay_button.setObjectName("Overlay")
         self.overlay_button.setCursor(Qt.PointingHandCursor)
+        self.overlay_button.setIconSize(QSize(18, 18))
         self.overlay_button.setStyleSheet(
-            "QPushButton#Overlay{background:rgba(18,19,26,0.85);color:#fff;"
-            "border:1px solid rgba(255,255,255,0.32);border-radius:10px;"
-            "padding:11px 20px;font-size:15px;font-weight:600;}"
-            "QPushButton#Overlay:hover{background:rgba(124,92,255,0.95);"
+            "QPushButton#Overlay{background:rgba(20,22,32,0.82);color:#fff;"
+            "border:1px solid rgba(255,255,255,0.20);border-radius:21px;"
+            "padding:11px 22px 11px 18px;font-size:14px;font-weight:600;}"
+            "QPushButton#Overlay:hover{background:rgba(124,92,255,0.96);"
             "border-color:#9179ff;}"
         )
         self.overlay_button.clicked.connect(self._overlay_clicked)
@@ -704,12 +705,14 @@ class PlayerWindow(QDialog):
             return
         self._overlay_mode = mode
         labels = {
-            "intro": "⏭  Salta intro",
-            "next": "▶  Episodio successivo",
-            "credits": "⏭  Salta titoli di coda",
+            "intro": ("skip", "  Salta intro"),
+            "next": ("next", "  Episodio successivo"),
+            "credits": ("skip", "  Salta titoli di coda"),
         }
         if mode:
-            self.overlay_button.setText(labels[mode])
+            glyph, text = labels[mode]
+            self.overlay_button.setIcon(icon(glyph, "#ffffff", 18))
+            self.overlay_button.setText(text)
             self._position_overlay()
             self.overlay_button.show()
             self.overlay_button.raise_()
