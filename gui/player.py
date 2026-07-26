@@ -360,6 +360,18 @@ class PlayerWindow(QDialog):
         prefix = "▶" if local_path else "Anteprima ·"
         self.setWindowTitle(f"{prefix} {anime_title} — {where}")
         self.setModal(False)
+        # Give the player normal window controls: minimise (to the taskbar) and
+        # maximise/restore, not just the dialog's close button. Qt.Window (rather than the
+        # default Qt.Dialog) plus an unowned top-level (parent=None from the caller) is
+        # what earns a real taskbar button on Windows.
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowTitleHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+            | Qt.WindowCloseButtonHint
+        )
         self.resize(940, 580)
         self.setMinimumSize(560, 360)
 

@@ -1268,7 +1268,7 @@ class MainWindow(QMainWindow):
             total=total,
             resume_ms=resume_ms,
             local_path=local_path,
-            parent=self,
+            parent=None,  # unowned top-level: its own taskbar button + working minimise
         )
         window.download_requested.connect(self._enqueue_one)
         # Read progress from the player (its episode changes when it auto-advances).
