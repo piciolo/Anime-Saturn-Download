@@ -11,7 +11,18 @@ import os
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QSize, Qt, QUrl, Signal, QTimer
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QPoint,
+    QPointF,
+    QRectF,
+    QSize,
+    Qt,
+    QUrl,
+    Signal,
+    QTimer,
+)
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -718,20 +729,32 @@ class PlayerWindow(QDialog):
                 mode = "credits"
             elif self._has_next():
                 mode = "next"
-        if mode == self._overlay_mode:
-            if mode is not None:
-                self._position_overlay()  # keep the floating window glued to the video
-            return
-        self._overlay_mode = mode
-        labels = {
-            "intro": ("skip", "  Salta intro"),
-            "next": ("next", "  Episodio successivo"),
-            "credits": ("skip", "  Salta titoli di coda"),
-        }
-        if mode:
-            glyph, text = labels[mode]
-            self.overlay_button.setIcon(icon(glyph, "#ffffff", 18))
-            self.overlay_button.setText(text)
+        if mode != self._overlay_mode:
+            self._overlay_mode = mode
+            if mode:
+                labels = {
+                    "intro": ("skip", "  Salta intro"),
+                    "next": ("next", "  Episodio successivo"),
+                    "credits": ("skip", "  Salta titoli di coda"),
+                }
+                glyph, text = labels[mode]
+                self.overlay_button.setIcon(icon(glyph, "#ffffff", 18))
+                self.overlay_button.setText(text)
+        self._sync_overlay_visibility()
+
+    def _sync_overlay_visibility(self) -> None:
+        """Show the floating overlay only while the player is the active foreground window.
+
+        It is a stay-on-top tool window, so without this it keeps floating over other apps
+        (or the desktop) when the player is minimised or sent to the background.
+        """
+        show = (
+            self._overlay_mode is not None
+            and self.isVisible()
+            and self.isActiveWindow()
+            and not self.isMinimized()
+        )
+        if show:
             self._position_overlay()
             self.overlay_button.show()
             self.overlay_button.raise_()
@@ -1082,6 +1105,17 @@ class PlayerWindow(QDialog):
             self._set_fullscreen(False)
             return
         super().keyPressEvent(event)
+
+    def changeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # Hide/show the stay-on-top overlay as the player is activated, deactivated or
+        # minimised, so it never lingers over other apps in the background.
+        if event.type() in (QEvent.ActivationChange, QEvent.WindowStateChange):
+            self._sync_overlay_visibility()
+        super().changeEvent(event)
+
+    def hideEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self.overlay_button.hide()  # the player is no longer on screen
+        super().hideEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self.overlay_button.close()  # the overlay is a separate top-level window
