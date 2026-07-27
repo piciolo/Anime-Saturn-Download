@@ -352,6 +352,7 @@ class PlayerWindow(QDialog):
         self._seeking = False
         self._resume_ms = max(int(resume_ms), 0)
         self._resumed = False
+        self._resume_stable = 0      # consecutive ticks the seek has held at the target
         self._extra_start = 0        # post-credits start (ms), 0 = none detected
         self._op_start = 0           # opening start (ms), detected by fingerprinting
         self._op_end = 0             # opening end (ms), 0 = not detected
@@ -395,6 +396,14 @@ class PlayerWindow(QDialog):
         self.video.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video.setStyleSheet("background:#000;border-radius:10px;")
         self.player.setVideoOutput(self.video)
+
+        # Drive the resume seek from a fixed-interval timer rather than positionChanged:
+        # the Windows backend accepts a seek issued a moment after buffering but silently
+        # resets one issued immediately, so we retry on a timer until it holds (see
+        # _maybe_resume).
+        self._resume_timer = QTimer(self)
+        self._resume_timer.setInterval(500)
+        self._resume_timer.timeout.connect(self._maybe_resume)
 
         # Periodically persist progress while playing.
         self._save_timer = QTimer(self)
@@ -563,7 +572,6 @@ class PlayerWindow(QDialog):
         self.position_slider.sliderMoved.connect(self._on_seek_preview)
         self.player.positionChanged.connect(self._on_position)
         self.player.durationChanged.connect(self._on_duration)
-        self.player.seekableChanged.connect(lambda *_: self._maybe_resume())
         self.player.playbackStateChanged.connect(self._on_state)
         self.player.mediaStatusChanged.connect(self._on_media_status)
         self.player.errorOccurred.connect(self._on_error)
@@ -593,6 +601,7 @@ class PlayerWindow(QDialog):
             self._media_url = QUrl.fromLocalFile(self.local_path).toString()
             self.player.setSource(QUrl.fromLocalFile(self.local_path))
             self.player.play()
+            self._arm_resume()
             self._start_probe()
             self._start_intro_detection()
             return
@@ -613,6 +622,7 @@ class PlayerWindow(QDialog):
         self.status.setText("Caricamento…")
         self.player.setSource(QUrl(url))
         self.player.play()
+        self._arm_resume()
         # The post-credits probe is deferred until the end is in sight (see _on_position)
         # and fingerprinting waits a few seconds, so neither starves the playback buffer.
         QTimer.singleShot(
@@ -634,6 +644,8 @@ class PlayerWindow(QDialog):
         self.local_path = local_path
         self._resume_ms = max(int(resume_ms), 0)
         self._resumed = False
+        self._resume_stable = 0
+        self._resume_timer.stop()  # _start() re-arms it for the new episode
         self._token = object()
         self._media_url = ""
         self._extra_start = 0
@@ -669,24 +681,37 @@ class PlayerWindow(QDialog):
         self._start()
 
     def _maybe_resume(self) -> None:
-        """Resume from the saved position, retrying until the seek actually lands.
+        """Resume from the saved position, retrying until the seek *holds*.
 
-        A single ``setPosition`` right after ``play()`` on a network stream is silently
-        dropped (playback stays at the start), so we re-issue it on every position
-        update and only consider it done once playback has reached the target.
+        The Windows backend momentarily reports the target position after a seek but then
+        resets to 0, so a single seek — or one that trusts a single position report — plays
+        from the start. We retry on a timer and only consider it done once the position has
+        held at/after the target for two consecutive ticks, which filters that transient.
         """
         if self._resumed or self._resume_ms <= 0:
+            self._resume_timer.stop()
             return
         duration = self.player.duration()
         if duration <= 0 or not self.player.isSeekable():
-            return
+            return  # not ready to seek yet; the timer will try again
         if self._resume_ms >= duration - 15_000:  # too close to the end: skip resuming
             self._resumed = True
+            self._resume_timer.stop()
             return
-        if self.player.position() >= self._resume_ms - 3_000:  # the seek has landed
-            self._resumed = True
+        if self.player.position() >= self._resume_ms - 2_500:
+            self._resume_stable += 1
+            if self._resume_stable >= 2:  # held at the target -> it really landed
+                self._resumed = True
+                self._resume_timer.stop()
             return
+        self._resume_stable = 0
         self.player.setPosition(self._resume_ms)
+
+    def _arm_resume(self) -> None:
+        """Start retrying the resume seek (if there is a saved position to restore)."""
+        self._resume_stable = 0
+        if self._resume_ms > 0 and not self._resumed:
+            self._resume_timer.start()
 
     # ------------------------------------------------------------------ #
     # Overlay: skip intro / next episode / skip credits
@@ -872,6 +897,8 @@ class PlayerWindow(QDialog):
 
     def _begin_seek(self) -> None:
         self._seeking = True
+        self._resumed = True  # a manual seek cancels the pending auto-resume
+        self._resume_timer.stop()
 
     def _on_seek_preview(self, value: int) -> None:
         # Show the target time while dragging/clicking, before the seek is committed.
@@ -894,7 +921,6 @@ class PlayerWindow(QDialog):
         self.player.setPosition(self.position_slider.value())
 
     def _on_position(self, position: int) -> None:
-        self._maybe_resume()  # keep retrying the resume seek until it lands
         self._update_overlay(position)
         if not self._probe_started and not self.local_path:
             duration = self.player.duration()
@@ -907,7 +933,6 @@ class PlayerWindow(QDialog):
     def _on_duration(self, duration: int) -> None:
         self.position_slider.setRange(0, duration)
         self.time_label.setText(f"{_fmt(self.player.position())} / {_fmt(duration)}")
-        self._maybe_resume()
 
     def _on_state(self, state: QMediaPlayer.PlaybackState) -> None:
         playing = state == QMediaPlayer.PlayingState
@@ -922,7 +947,6 @@ class PlayerWindow(QDialog):
         _diag(f"status -> {status.name} at {_fmt(self.player.position())}")
         if status in {QMediaPlayer.BufferedMedia, QMediaPlayer.BufferingMedia}:
             self.status.hide()
-            self._maybe_resume()
         elif status == QMediaPlayer.StalledMedia:
             self.status.setText("Buffering…")
             self.status.show()
@@ -1008,6 +1032,7 @@ class PlayerWindow(QDialog):
         self._recovering = False
         self.player.setSource(QUrl(url))
         self.player.play()
+        self._arm_resume()  # seek back to where the stream died
 
     def _on_recover_error(self, token: object, message: str) -> None:
         if token is not self._token:
@@ -1123,17 +1148,21 @@ class PlayerWindow(QDialog):
         self._emit_progress()  # final persist (may auto-mark finished near the end)
         self._token = object()  # ignore any in-flight resolve result
         self._watchdog.stop()
+        self._resume_timer.stop()
         # Stop listening before teardown so the player's own signals don't fire into a
-        # half-closed window while it unwinds.
-        try:
-            self.player.playbackStateChanged.disconnect()
-            self.player.mediaStatusChanged.disconnect()
-            self.player.positionChanged.disconnect()
-            self.player.durationChanged.disconnect()
-            self.player.seekableChanged.disconnect()
-            self.player.errorOccurred.disconnect()
-        except (RuntimeError, TypeError):
-            pass
+        # half-closed window while it unwinds. Each disconnect is guarded on its own so one
+        # signal with no remaining connections can't skip the rest.
+        for signal in (
+            self.player.playbackStateChanged,
+            self.player.mediaStatusChanged,
+            self.player.positionChanged,
+            self.player.durationChanged,
+            self.player.errorOccurred,
+        ):
+            try:
+                signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass
         self.player.stop()
         self.player.setSource(QUrl())
         super().closeEvent(event)
