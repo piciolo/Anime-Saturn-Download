@@ -354,6 +354,7 @@ class PlayerWindow(QDialog):
         self._stuck_ticks = 0
         self._healthy_ticks = 0
         self._last_pos = -1
+        self._normal_geometry = None  # windowed geometry, restored when leaving fullscreen
 
         self.setObjectName("Player")
         where = f"Episodio {episode.number} di {total}" if total else episode.number_label
@@ -996,11 +997,15 @@ class PlayerWindow(QDialog):
         self._set_fullscreen(not self.isFullScreen())
 
     def _set_fullscreen(self, on: bool) -> None:
-        # A parented QDialog isn't granted "exclusive" fullscreen on Windows, so the
-        # taskbar stays on top. Forcing stay-on-top (and taking focus) makes the video
-        # cover the whole screen, taskbar included; the flag is dropped on exit.
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+        if on == self.isFullScreen():
+            return
+        # Forcing stay-on-top makes the video cover the whole screen (taskbar included) on
+        # Windows; toggling that flag recreates the native window, which loses Qt's
+        # remembered normal size — so we save and restore the windowed geometry ourselves.
         if on:
+            if not self.isMaximized():
+                self._normal_geometry = self.geometry()
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
             self.showFullScreen()
             self.raise_()
             self.activateWindow()
@@ -1012,7 +1017,10 @@ class PlayerWindow(QDialog):
             self.controls_bar.show()
             self.unsetCursor()
             self.video.unsetCursor()
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
             self.showNormal()
+            if self._normal_geometry is not None:
+                self.setGeometry(self._normal_geometry)  # back to the pre-fullscreen size
             self.fullscreen_button.setIcon(icon("fullscreen", "#e8e9f0", 22))
             self.fullscreen_button.setToolTip("Schermo intero")
 
