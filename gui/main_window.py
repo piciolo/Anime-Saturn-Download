@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from .flowlayout import FlowLayout
+from .favorites import FavoritesStore
 from .history import WatchHistory, format_progress
 from .models import Anime, Episode
 from .net import (
@@ -128,6 +129,7 @@ class MainWindow(QMainWindow):
         self._detail_total = 0
         self._poster_workers: set = set()
         self.history = WatchHistory()
+        self.favorites = FavoritesStore()
 
         from . import __version__
 
@@ -155,6 +157,9 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_catalog_tab(), "Catalogo")
         self._genres_tab_index = self.tabs.addTab(self._build_genres_tab(), "Generi")
+        self._favorites_tab_index = self.tabs.addTab(
+            self._build_favorites_tab(), "★  Preferiti"
+        )
         self._continue_tab_index = self.tabs.addTab(
             self._build_continue_tab(), "▶  Continua"
         )
@@ -372,10 +377,21 @@ class MainWindow(QMainWindow):
 
         info = QVBoxLayout()
         info.setSpacing(8)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
         self.detail_title = QLabel("")
         self.detail_title.setObjectName("SectionTitle")
         self.detail_title.setWordWrap(True)
-        info.addWidget(self.detail_title)
+        title_row.addWidget(self.detail_title, 1)
+
+        # Favourite toggle: the star sits with the title so it reads as a property of the
+        # anime rather than another action button.
+        self.favorite_button = QPushButton("☆  Preferiti")
+        self.favorite_button.setObjectName("Ghost")
+        self.favorite_button.setCursor(Qt.PointingHandCursor)
+        self.favorite_button.clicked.connect(self._toggle_favorite)
+        title_row.addWidget(self.favorite_button, 0, Qt.AlignTop)
+        info.addLayout(title_row)
 
         self.detail_meta = QLabel("")
         self.detail_meta.setObjectName("Muted")
@@ -487,6 +503,80 @@ class MainWindow(QMainWindow):
         self.empty_queue_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.empty_queue_label)
         return page
+
+    # ------------------------------------------------------------------ #
+    # Favourites
+    # ------------------------------------------------------------------ #
+    def _update_favorite_button(self) -> None:
+        """Reflect the current anime's favourite state on the detail page button."""
+        anime = getattr(self, "_detail_anime", None)
+        if anime is None:
+            return
+        starred = self.favorites.is_favorite(anime.title)
+        self.favorite_button.setText("★  Nei preferiti" if starred else "☆  Preferiti")
+        self.favorite_button.setToolTip(
+            "Rimuovi dai preferiti" if starred else "Aggiungi ai preferiti"
+        )
+
+    def _toggle_favorite(self) -> None:
+        anime = getattr(self, "_detail_anime", None)
+        if anime is None:
+            return
+        self.favorites.toggle(
+            title=anime.title, slug=anime.slug, poster=anime.poster
+        )
+        self._update_favorite_button()
+        if self.tabs.currentIndex() == self._favorites_tab_index:
+            self._refresh_favorites()
+
+    def _build_favorites_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setSpacing(8)
+
+        self.favorites_status = QLabel("")
+        self.favorites_status.setObjectName("Muted")
+        layout.addWidget(self.favorites_status)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        self.favorites_grid = FlowLayout(container, margin=2, h_spacing=16, v_spacing=18)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
+        self.favorites_empty = QLabel(
+            "Nessun preferito. Apri un anime e tocca ☆ Preferiti per salvarlo qui."
+        )
+        self.favorites_empty.setObjectName("Muted")
+        self.favorites_empty.setAlignment(Qt.AlignCenter)
+        self.favorites_empty.setWordWrap(True)
+        layout.addWidget(self.favorites_empty)
+        return page
+
+    def _refresh_favorites(self) -> None:
+        _clear_layout(self.favorites_grid)
+        entries = self.favorites.all()
+        for entry in entries:
+            # Favourites store only what a card needs; the rest is filled on open.
+            anime = Anime(
+                slug=entry.get("slug", ""),
+                title=entry.get("title", ""),
+                poster=entry.get("poster", ""),
+                anime_type="",
+                dubbed=False,
+                episodes_count=0,
+                year="",
+                score="",
+            )
+            card = AnimeCard(anime, self.client, self.io_pool)
+            card.clicked.connect(self._open_detail)
+            self.favorites_grid.addWidget(card)
+        self.favorites_status.setText(
+            f"{len(entries)} preferiti" if entries else ""
+        )
+        self.favorites_empty.setVisible(not entries)
 
     # ------------------------------------------------------------------ #
     # Genres tab (mirrors the site's /genres page)
@@ -668,6 +758,8 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index: int) -> None:
         if index == self._genres_tab_index:
             self._refresh_genres()
+        elif index == self._favorites_tab_index:
+            self._refresh_favorites()
         elif index == self._continue_tab_index:
             self._refresh_continue()
         elif index == self._library_tab_index:
@@ -1066,6 +1158,7 @@ class MainWindow(QMainWindow):
         self._detail_anime = anime
         self.catalog_stack.setCurrentIndex(1)
         self.detail_title.setText(anime.title)
+        self._update_favorite_button()
         meta_bits = [
             bit
             for bit in (
