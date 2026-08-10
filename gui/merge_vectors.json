@@ -1,0 +1,97 @@
+{
+  "_comment": [
+    "CONTRATTO DI FUSIONE CONDIVISO fra l'app Windows (Python) e l'app Android (Flutter).",
+    "Questo file e' la fonte di verita' di 'chi vince' quando lo stesso anime e' stato",
+    "guardato su due dispositivi. Entrambe le app eseguono questi casi nei propri test:",
+    "se una delle due si comporta diversamente anche su un solo caso, il test fallisce",
+    "subito, invece di corrompere in silenzio la cronologia dell'utente.",
+    "",
+    "COPIA IDENTICA in flutter_app/assets/merge_vectors.json - i due file devono restare",
+    "byte per byte uguali. Nessuno dei due va modificato senza aggiornare l'altro.",
+    "",
+    "REGOLA (in ordine, la prima che decide vince):",
+    " 1. l'episodio piu' avanti vince (un episodio finito non torna mai indietro);",
+    " 2. a parita' di episodio, la posizione piu' avanti vince;",
+    " 3. a parita' di entrambi, vince chi ha l'orario piu' recente;",
+    " 4. i metadati (titolo, poster, slug, totale episodi) si prendono dal vincitore,",
+    "    ma un campo vuoto del vincitore viene riempito con quello del perdente.",
+    "Per i preferiti vale solo l'orario piu' recente: l'ultima decisione dell'utente."
+  ],
+  "version": 1,
+  "progress": [
+    {
+      "name": "posizione piu' avanti nello stesso episodio",
+      "a": {"episode_number": "5", "position_ms": 180000, "completed": false, "updated_at": 1000.0},
+      "b": {"episode_number": "5", "position_ms": 720000, "completed": false, "updated_at": 900.0},
+      "expect": {"episode_number": "5", "position_ms": 720000}
+    },
+    {
+      "name": "episodio piu' avanti vince anche se salvato prima",
+      "a": {"episode_number": "7", "position_ms": 5000, "completed": false, "updated_at": 500.0},
+      "b": {"episode_number": "4", "position_ms": 1200000, "completed": false, "updated_at": 999.0},
+      "expect": {"episode_number": "7", "position_ms": 5000}
+    },
+    {
+      "name": "episodio finito su un lato, a meta' sull'altro lato ma stesso episodio",
+      "a": {"episode_number": "3", "position_ms": 1400000, "completed": true, "updated_at": 100.0},
+      "b": {"episode_number": "3", "position_ms": 300000, "completed": false, "updated_at": 200.0},
+      "expect": {"episode_number": "3", "position_ms": 1400000, "completed": true}
+    },
+    {
+      "name": "a parita' di episodio e posizione decide l'orario piu' recente",
+      "a": {"episode_number": "2", "position_ms": 60000, "completed": false, "updated_at": 100.0},
+      "b": {"episode_number": "2", "position_ms": 60000, "completed": false, "updated_at": 300.0},
+      "expect": {"episode_number": "2", "position_ms": 60000, "updated_at": 300.0}
+    },
+    {
+      "name": "il lato senza dati non cancella quello con dati",
+      "a": {"episode_number": "", "position_ms": 0, "completed": false, "updated_at": 900.0},
+      "b": {"episode_number": "6", "position_ms": 400000, "completed": false, "updated_at": 100.0},
+      "expect": {"episode_number": "6", "position_ms": 400000}
+    },
+    {
+      "name": "episodi con numerazione decimale (7.5 sta fra 7 e 8)",
+      "a": {"episode_number": "7.5", "position_ms": 10000, "completed": false, "updated_at": 100.0},
+      "b": {"episode_number": "7", "position_ms": 900000, "completed": false, "updated_at": 200.0},
+      "expect": {"episode_number": "7.5", "position_ms": 10000}
+    },
+    {
+      "name": "etichetta non numerica: non e' confrontabile, decide l'orario",
+      "a": {"episode_number": "OVA", "position_ms": 30000, "completed": false, "updated_at": 400.0},
+      "b": {"episode_number": "9", "position_ms": 30000, "completed": false, "updated_at": 100.0},
+      "expect": {"episode_number": "OVA", "position_ms": 30000}
+    },
+    {
+      "name": "i metadati mancanti nel vincitore si prendono dal perdente",
+      "a": {"episode_number": "5", "position_ms": 500000, "completed": false, "updated_at": 900.0, "title": "Anime", "poster": "", "total_episodes": 0},
+      "b": {"episode_number": "5", "position_ms": 100000, "completed": false, "updated_at": 100.0, "title": "Anime", "poster": "p.jpg", "total_episodes": 12},
+      "expect": {"episode_number": "5", "position_ms": 500000, "poster": "p.jpg", "total_episodes": 12}
+    },
+    {
+      "name": "fondere un record con se stesso non cambia nulla",
+      "a": {"episode_number": "8", "position_ms": 123456, "completed": false, "updated_at": 555.0},
+      "b": {"episode_number": "8", "position_ms": 123456, "completed": false, "updated_at": 555.0},
+      "expect": {"episode_number": "8", "position_ms": 123456, "updated_at": 555.0}
+    }
+  ],
+  "favourites": [
+    {
+      "name": "rimozione piu' recente vince: il preferito resta tolto",
+      "a": {"is_favourite": true, "toggled_at": 100.0},
+      "b": {"is_favourite": false, "toggled_at": 200.0},
+      "expect": {"is_favourite": false}
+    },
+    {
+      "name": "aggiunta piu' recente vince",
+      "a": {"is_favourite": false, "toggled_at": 100.0},
+      "b": {"is_favourite": true, "toggled_at": 200.0},
+      "expect": {"is_favourite": true}
+    },
+    {
+      "name": "a parita' di orario si preferisce lo stato conservativo (resta preferito)",
+      "a": {"is_favourite": true, "toggled_at": 300.0},
+      "b": {"is_favourite": false, "toggled_at": 300.0},
+      "expect": {"is_favourite": true}
+    }
+  ]
+}
