@@ -26,6 +26,15 @@ from .merge import merge_favourite, merge_progress
 
 _AUTH_HOST = "https://identitytoolkit.googleapis.com/v1"
 _TOKEN_HOST = "https://securetoken.googleapis.com/v1"
+
+# Firebase project this app syncs with. These two are client-side identifiers, meant to
+# ship inside apps: on their own they grant nothing, because the database's security
+# rules only ever allow a signed-in user into their own subtree (see firebase_rules.json,
+# verified: unauthenticated reads and writes are both refused).
+DEFAULT_API_KEY = "AIzaSyCyQfsSP_x5ygNoV5AuozlTFYt4QTQ0nKM"
+DEFAULT_DATABASE_URL = (
+    "https://animesaturn-default-rtdb.europe-west1.firebasedatabase.app"
+)
 _TIMEOUT = 20.0
 # Refresh a little before the hour is up, so a long sync can't expire mid-flight.
 _REFRESH_MARGIN_S = 300
@@ -89,11 +98,12 @@ class CloudConfig:
     # --- project settings --- #
     @property
     def api_key(self) -> str:
-        return self._data.get("api_key", "")
+        # A stored value wins, so a different project can be pointed at without a rebuild.
+        return self._data.get("api_key") or DEFAULT_API_KEY
 
     @property
     def database_url(self) -> str:
-        return self._data.get("database_url", "").rstrip("/")
+        return (self._data.get("database_url") or DEFAULT_DATABASE_URL).rstrip("/")
 
     def set_project(self, api_key: str, database_url: str) -> None:
         self._data["api_key"] = api_key.strip()

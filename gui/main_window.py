@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
 )
 
 from .flowlayout import FlowLayout
+from .account import AccountDialog
+from .cloud import CloudClient, CloudConfig, SyncWorker
 from .favorites import FavoritesStore
 from .history import WatchHistory, format_progress
 from .models import Anime, Episode
@@ -130,6 +132,8 @@ class MainWindow(QMainWindow):
         self._poster_workers: set = set()
         self.history = WatchHistory()
         self.favorites = FavoritesStore()
+        self.cloud = CloudClient(CloudConfig())
+        self._account_dialog = None
 
         from . import __version__
 
@@ -202,6 +206,14 @@ class MainWindow(QMainWindow):
         version.setObjectName("Muted")
         top.addWidget(version)
         top.addStretch(1)
+
+        self.account_button = QPushButton("👤  Account")
+        self.account_button.setObjectName("Ghost")
+        self.account_button.setToolTip(
+            "Accedi per ritrovare cronologia e preferiti su PC e telefono"
+        )
+        self.account_button.clicked.connect(self._open_account)
+        top.addWidget(self.account_button)
 
         self.folder_button = QPushButton("📁  Cartella download")
         self.folder_button.setObjectName("Ghost")
@@ -503,6 +515,55 @@ class MainWindow(QMainWindow):
         self.empty_queue_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.empty_queue_label)
         return page
+
+    # ------------------------------------------------------------------ #
+    # Account + cloud sync
+    # ------------------------------------------------------------------ #
+    def _open_account(self) -> None:
+        dialog = AccountDialog(self.cloud, self)
+        self._account_dialog = dialog
+        dialog.sync_requested.connect(self._start_sync)
+        dialog.signed_out.connect(self._update_account_button)
+        dialog.signed_in.connect(self._update_account_button)
+        dialog.exec()
+        self._account_dialog = None
+        self._update_account_button()
+
+    def _update_account_button(self) -> None:
+        signed_in = self.cloud.config.signed_in
+        self.account_button.setText("👤  Account" if not signed_in else "☁  Account")
+        self.account_button.setToolTip(
+            f"Collegato come {self.cloud.config.email}"
+            if signed_in
+            else "Accedi per ritrovare cronologia e preferiti su PC e telefono"
+        )
+
+    def _start_sync(self) -> None:
+        """Merge local history and favourites with the account, off the UI thread."""
+        if not self.cloud.config.signed_in:
+            return
+        worker = SyncWorker(
+            self.cloud, dict(self.history._data), dict(self.favorites._data)
+        )
+        worker.signals.done.connect(self._on_sync_done)
+        worker.signals.error.connect(self._on_sync_error)
+        self.io_pool.start(worker)
+
+    def _on_sync_done(self, history: dict, favorites: dict) -> None:
+        # Adopt the merged result locally: it already contains everything this device had.
+        self.history._data = history
+        self.history._save()
+        self.favorites._data = favorites
+        self.favorites._save()
+        self._refresh_watch_views()
+        if self.tabs.currentIndex() == self._favorites_tab_index:
+            self._refresh_favorites()
+        if self._account_dialog is not None:
+            self._account_dialog.report("Sincronizzato.")
+
+    def _on_sync_error(self, message: str) -> None:
+        if self._account_dialog is not None:
+            self._account_dialog.report(f"Sincronizzazione non riuscita.\n{message}")
 
     # ------------------------------------------------------------------ #
     # Favourites
