@@ -891,7 +891,31 @@ class MainWindow(QMainWindow):
             lambda _=False, t=entry.get("title", ""): self._remove_continue(t)
         )
         outer.addWidget(remove)
+        # Clicking the row itself opens the anime's page (episode list, plot, download),
+        # while "Riprendi" stays for jumping straight back into playback.
+        row.setCursor(Qt.PointingHandCursor)
+        row.mousePressEvent = lambda _e, en=entry: self._open_entry_detail(en)
         return row
+
+    def _open_entry_detail(self, entry: dict) -> None:
+        """Open the anime page for a continue-watching entry."""
+        title = entry.get("title", "")
+        if not title:
+            return
+        # Favourites and history only keep what a card needs; the detail page reloads
+        # episodes and plot from the site when it opens.
+        anime = Anime(
+            slug=entry.get("slug", ""),
+            title=title,
+            poster=entry.get("poster", ""),
+            anime_type="",
+            dubbed=False,
+            episodes_count=int(entry.get("total_episodes") or 0),
+            year="",
+            score="",
+        )
+        self.tabs.setCurrentIndex(0)  # the detail page lives in the Catalogo tab
+        self._open_detail(anime)
 
     def _remove_continue(self, title: str) -> None:
         self.history.remove(title)
