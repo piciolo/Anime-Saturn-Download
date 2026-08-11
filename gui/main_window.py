@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QStringListModel, QThreadPool, QTimer
@@ -178,6 +179,9 @@ class MainWindow(QMainWindow):
 
         # Press Esc to go back from an anime detail to the results.
         QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self._go_back)
+
+        # Pull anything watched elsewhere shortly after launch, once the window is up.
+        QTimer.singleShot(2500, self._auto_sync)
 
     def _go_back(self) -> None:
         """Return from the anime detail view to the results grid."""
@@ -537,6 +541,21 @@ class MainWindow(QMainWindow):
             if signed_in
             else "Accedi per ritrovare cronologia e preferiti su PC e telefono"
         )
+
+    def _auto_sync(self) -> None:
+        """Sync in the background, but not more often than once a minute.
+
+        Automatic rounds are silent: they never interrupt what the user is doing, and a
+        failure (offline, for instance) is simply skipped — the local files stay the
+        source of truth and the next round will catch up.
+        """
+        if not self.cloud.config.signed_in:
+            return
+        now = time.time()
+        if now - getattr(self, "_last_auto_sync", 0.0) < 60:
+            return
+        self._last_auto_sync = now
+        self._start_sync()
 
     def _start_sync(self) -> None:
         """Merge local history and favourites with the account, off the UI thread."""
@@ -1462,6 +1481,7 @@ class MainWindow(QMainWindow):
     def _on_player_closed(self, window) -> None:
         self._players.discard(window)
         self._refresh_watch_views()
+        self._auto_sync()  # push where you got to, so the phone can pick it up
 
     def _on_player_progress(self, player, position, duration, finished) -> None:
         self.history.record(
