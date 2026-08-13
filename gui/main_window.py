@@ -542,17 +542,18 @@ class MainWindow(QMainWindow):
             else "Accedi per ritrovare cronologia e preferiti su PC e telefono"
         )
 
-    def _auto_sync(self) -> None:
-        """Sync in the background, but not more often than once a minute.
+    def _auto_sync(self, force: bool = False) -> None:
+        """Sync in the background, by default not more often than once a minute.
 
         Automatic rounds are silent: they never interrupt what the user is doing, and a
         failure (offline, for instance) is simply skipped — the local files stay the
-        source of truth and the next round will catch up.
+        source of truth and the next round will catch up. ``force`` bypasses the throttle
+        for the moments the user is explicitly looking at synced data.
         """
         if not self.cloud.config.signed_in:
             return
         now = time.time()
-        if now - getattr(self, "_last_auto_sync", 0.0) < 60:
+        if not force and now - getattr(self, "_last_auto_sync", 0.0) < 60:
             return
         self._last_auto_sync = now
         self._start_sync()
@@ -840,8 +841,12 @@ class MainWindow(QMainWindow):
             self._refresh_genres()
         elif index == self._favorites_tab_index:
             self._refresh_favorites()
+            self._auto_sync(force=True)
         elif index == self._continue_tab_index:
             self._refresh_continue()
+            # Opening these tabs means wanting the current picture, so sync regardless of
+            # the throttle — otherwise you stare at a stale list exactly when it matters.
+            self._auto_sync(force=True)
         elif index == self._library_tab_index:
             self._refresh_library()
 
@@ -1484,6 +1489,11 @@ class MainWindow(QMainWindow):
         self._auto_sync()  # push where you got to, so the phone can pick it up
 
     def _on_player_progress(self, player, position, duration, finished) -> None:
+        # Push progress while watching, not only when the player closes: otherwise
+        # picking up the phone mid-episode finds nothing new on the account. The
+        # once-a-minute throttle keeps this to a trickle even though the player reports
+        # progress every few seconds.
+        self._auto_sync()
         self.history.record(
             title=player.anime_title,
             episode_number=player.episode.number,
