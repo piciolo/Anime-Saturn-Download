@@ -1,18 +1,18 @@
 """Canonical key for an anime — the identifier that survives across portals.
 
-The watch history is keyed per anime. Today every entry comes from one site, so keying on
-the sanitised title works. The moment a second portal is added that breaks: the same show
-is listed as "Witch Hat Atelier (ITA)" on one and "Witch Hat Atelier" on the other, which
-would produce two separate entries, two rows in "Continua", and two resume points synced
-to every device.
+The watch history is keyed per anime. With one portal, keying on the sanitised title
+works. With two it breaks: the same show is listed as "Aldnoah.Zero 2" on one site and
+"ALDNOAH.ZERO Season 2" on the other. Each spelling would get its own entry, its own row
+in "Continua", and its own resume point synced to every device.
 
 This module derives a key that ignores how a portal *labels* a show while preserving what
-the show actually *is*. Only language, quality and format markers are stripped; anything
-that identifies the work — seasons, parts, subtitles, numbers — is kept untouched.
+the show actually *is*. Language, quality and format markers are stripped, and the many
+ways of numbering a season are folded into the bare number. Anything identifying the work
+— its name, its season number, its part — is kept.
 
 That asymmetry is deliberate. Two entries for one anime is an annoyance; one entry for two
-different anime shows the wrong episodes and corrupts the resume point of both. When in
-doubt, keep them apart.
+different anime plays the wrong episodes and corrupts both resume points. When in doubt,
+keep them apart — which is why a season number is always preserved, never dropped.
 
 The rules are pinned by ``canonical_vectors.json``, which the Android app runs as the same
 tests, so the two implementations cannot drift apart unnoticed.
@@ -59,6 +59,19 @@ _QUALITY_MARKERS = (
 
 _MARKERS = _LANGUAGE_MARKERS + _QUALITY_MARKERS
 
+# Portals number seasons differently for the same work: "2", "2nd Season", "Season 2",
+# "Stagione 2". Folded to the number alone they line up, while a title with no season
+# still differs from one that has a season — which keeps a series apart from its sequel.
+#
+# The captured number is always kept. Dropping it would merge season 2 into season 1 and
+# play the wrong episodes, which is worse than leaving two entries.
+_SEASON_WORD_FIRST = re.compile(
+    r"(?:season|stagione|series)\s*([0-9]+)", re.IGNORECASE
+)
+_SEASON_NUMBER_FIRST = re.compile(
+    r"([0-9]+)\s*(?:st|nd|rd|th)\s*(?:season|stagione)", re.IGNORECASE
+)
+
 
 def canonical_key(title: str) -> str:
     """Return the portal-independent key for ``title`` (empty string if unusable)."""
@@ -73,10 +86,12 @@ def canonical_key(title: str) -> str:
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = text.lower()
 
-    # Drop bracketed release tags outright: "(ITA)", "[Sub ITA]", "(1080p)". Brackets
-    # holding part of the actual title are rare, and what survives below still separates
-    # genuinely different works.
+    # Drop bracketed release tags outright: "(ITA)", "[Sub ITA]", "(1080p)".
     text = re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", " ", text)
+
+    # Fold season wording into the number, while punctuation still separates words.
+    text = _SEASON_WORD_FIRST.sub(lambda m: " " + m.group(1) + " ", text)
+    text = _SEASON_NUMBER_FIRST.sub(lambda m: " " + m.group(1) + " ", text)
 
     # Punctuation is decoration, not identity: "Re:Zero" and "ReZero" are one show.
     text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
