@@ -1445,7 +1445,12 @@ class MainWindow(QMainWindow):
         anime = self._detail_anime
         total = self.episode_list.count() or anime.episodes_count
         self._launch_player(
-            anime.title, episode, slug=anime.slug, poster=anime.poster, total=total
+            anime.title,
+            episode,
+            slug=anime.slug,
+            poster=anime.poster,
+            total=total,
+            source_id=anime.source_id,
         )
 
     def _launch_player(
@@ -1458,6 +1463,7 @@ class MainWindow(QMainWindow):
         total: int = 0,
         resume_ms: int | None = None,
         local_path: str = "",
+        source_id: str = "",
     ) -> None:
         # Prefer an already-downloaded copy (instant, offline) when we have one.
         if not local_path:
@@ -1465,7 +1471,7 @@ class MainWindow(QMainWindow):
         if resume_ms is None:
             resume_ms = self.history.resume_position(anime_title, episode.number)
         window = PlayerWindow(
-            self.client,
+            self.sources,
             anime_title,
             episode,
             self.io_pool,
@@ -1474,6 +1480,7 @@ class MainWindow(QMainWindow):
             total=total,
             resume_ms=resume_ms,
             local_path=local_path,
+            source_id=source_id,
             parent=None,  # unowned top-level: its own taskbar button + working minimise
         )
         window.download_requested.connect(self._enqueue_one)

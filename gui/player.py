@@ -336,10 +336,12 @@ class PlayerWindow(QDialog):
         total: int = 0,
         resume_ms: int = 0,
         local_path: str = "",
+        source_id: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.client = client
+        self.source_id = source_id
         self.anime_title = anime_title
         self.episode = episode
         self.pool = pool
@@ -605,7 +607,16 @@ class PlayerWindow(QDialog):
             self._start_probe()
             self._start_intro_detection()
             return
-        worker = ResolveWorker(self.client, self._token, self.episode.watch_path)
+        worker = ResolveWorker(
+            self.client,
+            self._token,
+            self.episode.watch_path,
+            # Con piu' portali collegati, se questo non riesce a servire l'episodio
+            # il registro prova gli altri prima di arrendersi.
+            source_id=getattr(self.episode, "source_id", "") or self.source_id,
+            title=self.anime_title,
+            episode_number=str(self.episode.number),
+        )
         worker.signals.done.connect(self._on_resolved)
         worker.signals.error.connect(self._on_resolve_error)
         self.pool.start(worker)
@@ -1018,7 +1029,16 @@ class PlayerWindow(QDialog):
         self.status.setText(f"Riconnessione… ({reason})")
         self.status.show()
         self.player.stop()
-        worker = ResolveWorker(self.client, self._token, self.episode.watch_path)
+        worker = ResolveWorker(
+            self.client,
+            self._token,
+            self.episode.watch_path,
+            # Con piu' portali collegati, se questo non riesce a servire l'episodio
+            # il registro prova gli altri prima di arrendersi.
+            source_id=getattr(self.episode, "source_id", "") or self.source_id,
+            title=self.anime_title,
+            episode_number=str(self.episode.number),
+        )
         worker.signals.done.connect(self._on_recover_resolved)
         worker.signals.error.connect(self._on_recover_error)
         self.pool.start(worker)

@@ -168,16 +168,35 @@ class ResolveWorker(QRunnable):
     round-trip runs.
     """
 
-    def __init__(self, client: AnimeSaturnClient, token: object, watch_path: str) -> None:
+    def __init__(
+        self,
+        client: AnimeSaturnClient,
+        token: object,
+        watch_path: str,
+        *,
+        source_id: str = "",
+        title: str = "",
+        episode_number: str = "",
+    ) -> None:
         super().__init__()
         self.client = client
         self.token = token
         self.watch_path = watch_path
+        self.source_id = source_id
+        self.title = title
+        self.episode_number = episode_number
         self.signals = ResolveSignals()
 
     def run(self) -> None:
         try:
-            url = self.client.resolve_download_url(self.watch_path)
+            # With the registry, a portal that cannot serve this episode is not the end:
+            # the others are tried before giving up.
+            if hasattr(self.client, "resolve_with_fallback") and self.title:
+                url, _used = self.client.resolve_with_fallback(
+                    self.watch_path, self.source_id, self.title, self.episode_number
+                )
+            else:
+                url = self.client.resolve_download_url(self.watch_path)
             self.signals.done.emit(self.token, url)
         except Exception as exc:  # noqa: BLE001 - surfaced in the player
             self.signals.error.emit(self.token, str(exc))

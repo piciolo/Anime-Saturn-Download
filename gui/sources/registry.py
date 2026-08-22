@@ -14,8 +14,10 @@ Two rules the aggregation follows:
 
 from __future__ import annotations
 
+from ..canonical import canonical_key
 from ..net import AnimeSaturnClient
 from .animesaturn import AnimeSaturnSource
+from .animeunity import AnimeUnitySource
 from .base import AnimeSource
 
 
@@ -23,7 +25,11 @@ class SourceRegistry:
     """The portals in use, in priority order."""
 
     def __init__(self, client: AnimeSaturnClient | None = None) -> None:
-        self._sources: list[AnimeSource] = [AnimeSaturnSource(client)]
+        # In ordine di preferenza: il primo che ha l'episodio viene usato per riprodurlo.
+        self._sources: list[AnimeSource] = [
+            AnimeSaturnSource(client),
+            AnimeUnitySource(),
+        ]
 
     # ------------------------------------------------------------------ #
     @property
@@ -72,7 +78,7 @@ class SourceRegistry:
                 )
             except Exception:  # noqa: BLE001 - one broken portal must not sink the rest
                 per_source.append([])
-        return _interleave(per_source)
+        return _dedupe(_interleave(per_source))
 
     def suggest(self, query: str) -> list[dict]:
         per_source: list[list[dict]] = []
@@ -97,6 +103,53 @@ class SourceRegistry:
             raise RuntimeError("Nessuna sorgente disponibile.")
         return source.resolve_download_url(watch_path)
 
+    def resolve_with_fallback(
+        self, watch_path: str, source_id: str, title: str, episode_number: str
+    ) -> tuple[str, str]:
+        """Play an episode, trying the other portals if its own cannot serve it.
+
+        Returns ``(media_url, source_id_used)``.
+
+        This is the payoff of having more than one source. Until now a portal that had
+        changed domain, gone down, or simply lacked that episode left the user stuck. Now
+        the app looks the anime up on the other portals by its canonical title, finds the
+        matching episode number and plays that instead — without asking anything.
+        """
+        errors: list[str] = []
+        preferred = self.get(source_id)
+        if preferred is not None:
+            try:
+                return preferred.resolve_download_url(watch_path), preferred.id
+            except Exception as exc:  # noqa: BLE001 - that is what the fallback is for
+                errors.append(f"{preferred.label}: {exc}")
+
+        wanted = canonical_key(title)
+        for source in self._sources:
+            if preferred is not None and source.id == preferred.id:
+                continue
+            try:
+                matches = [
+                    record
+                    for record in source.search(title)
+                    if canonical_key(record.get("title") or "") == wanted
+                ]
+                for record in matches[:2]:  # a couple of candidates is plenty
+                    detail = source.fetch_anime_detail(record.get("slug", ""))
+                    for episode in detail.get("episodes", []):
+                        if str(episode.get("number")) == str(episode_number):
+                            url = source.resolve_download_url(
+                                episode.get("watch_path", "")
+                            )
+                            if url:
+                                return url, source.id
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{source.label}: {exc}")
+
+        detail = "\n".join(errors[:3])
+        raise RuntimeError(
+            f"Nessun portale è riuscito a fornire questo episodio.\n{detail}"
+        )
+
     def close(self) -> None:
         for source in self._sources:
             try:
@@ -113,3 +166,43 @@ def _interleave(groups: list[list[dict]]) -> list[dict]:
             if i < len(group):
                 merged.append(group[i])
     return merged
+
+
+def _dedupe(records: list[dict]) -> list[dict]:
+    """Collapse the same anime listed by several portals into one result.
+
+    Two records are the same anime when they share the canonical key — the identity that
+    ignores how a portal spells a title. The first occurrence wins the card (sources are
+    tried in preference order), gains any field the other filled in, and keeps the full
+    list of portals that have it under ``sources``.
+
+    That list is what makes the fallback possible later: when one portal cannot play an
+    episode, the app already knows who else has the series.
+    """
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for record in records:
+        key = canonical_key(record.get("title") or "") or record.get("slug") or ""
+        entry = {
+            "source_id": record.get("source_id", ""),
+            "source_label": record.get("source_label", ""),
+            "slug": record.get("slug", ""),
+            "episodes_count": record.get("episodes_count") or 0,
+        }
+        if key not in merged:
+            record = dict(record)
+            record["sources"] = [entry]
+            merged[key] = record
+            order.append(key)
+            continue
+        winner = merged[key]
+        if all(s["source_id"] != entry["source_id"] for s in winner["sources"]):
+            winner["sources"].append(entry)
+        # Fill in whatever the winning portal left empty: a poster or plot from the
+        # other one is better than none.
+        for field in ("poster", "plot", "year", "score", "type"):
+            if not winner.get(field) and record.get(field):
+                winner[field] = record[field]
+        if not winner.get("episodes_count") and record.get("episodes_count"):
+            winner["episodes_count"] = record["episodes_count"]
+    return [merged[k] for k in order]
