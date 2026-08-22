@@ -20,6 +20,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
 
+from .canonical import canonical_key
+from .merge import merge_favourite
 from .net import sanitize_name
 
 
@@ -31,6 +33,8 @@ class FavoritesStore:
         self._dir = Path(base) if base else (Path.home() / ".animesaturn_downloader")
         self._path = self._dir / "favorites.json"
         self._data: dict[str, dict] = self._load()
+        if self._migrate_keys():
+            self._save()
 
     # ------------------------------------------------------------------ #
     def _load(self) -> dict[str, dict]:
@@ -53,7 +57,31 @@ class FavoritesStore:
 
     @staticmethod
     def _key(title: str) -> str:
-        return sanitize_name(title)
+        """Same canonical key as the watch history, so the two always line up."""
+        return canonical_key(title) or sanitize_name(title)
+
+    def _migrate_keys(self) -> bool:
+        """Re-key old favourites onto the canonical key, once. True if changed.
+
+        Mirrors the history migration: entries saved under a portal-specific title are
+        moved to the shared key, and any that collide are merged by the user's most recent
+        decision rather than one silently replacing the other.
+        """
+        migrated: dict[str, dict] = {}
+        changed = False
+        for key, entry in self._data.items():
+            title = entry.get("title") or key
+            new_key = self._key(title)
+            if new_key != key:
+                changed = True
+            if new_key in migrated:
+                migrated[new_key] = merge_favourite(migrated[new_key], entry)
+                changed = True
+            else:
+                migrated[new_key] = entry
+        if changed:
+            self._data = migrated
+        return changed
 
     # ------------------------------------------------------------------ #
     def is_favorite(self, title: str) -> bool:

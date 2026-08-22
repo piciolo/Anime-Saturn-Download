@@ -1,0 +1,109 @@
+{
+  "_comment": [
+    "CONTRATTO CONDIVISO per la chiave canonica di un anime, fra l'app Windows (Python)",
+    "e quella Android (Flutter). La chiave serve a riconoscere lo STESSO anime anche",
+    "quando due portali lo chiamano in modo leggermente diverso, cosi la cronologia non",
+    "si spezza in due voci quando aggiungeremo una seconda sorgente.",
+    "",
+    "COPIA IDENTICA in flutter_app/assets/canonical_vectors.json: i due file devono",
+    "restare byte per byte uguali.",
+    "",
+    "PRINCIPIO: si rimuove solo cio' che indica LINGUA, QUALITA' o FORMATO (ITA, Sub ITA,",
+    "DUB, 1080p, BD...). Non si tocca mai cio' che indica CONTENUTO: stagioni, parti,",
+    "numeri, sottotitoli dell'opera. Fondere due anime diversi e' molto peggio che",
+    "lasciarne due voci separate: nel primo caso l'utente vede episodi sbagliati.",
+    "",
+    "'same' = coppie che DEVONO produrre la stessa chiave.",
+    "'different' = coppie che NON devono mai coincidere."
+  ],
+  "version": 1,
+  "same": [
+    {
+      "name": "suffisso di lingua fra parentesi",
+      "a": "Witch Hat Atelier (ITA)",
+      "b": "Witch Hat Atelier"
+    },
+    {
+      "name": "suffisso di lingua senza parentesi",
+      "a": "Tougen Anki ITA",
+      "b": "Tougen Anki"
+    },
+    {
+      "name": "sub ita in coda",
+      "a": "One Piece Sub ITA",
+      "b": "One Piece"
+    },
+    {
+      "name": "dub e doppiato",
+      "a": "Naruto Shippuden (Dub ITA)",
+      "b": "Naruto Shippuden"
+    },
+    {
+      "name": "maiuscole e spazi in eccesso",
+      "a": "  BLACK   TORCH  ",
+      "b": "Black Torch"
+    },
+    {
+      "name": "punteggiatura decorativa",
+      "a": "Re:Zero - Starting Life in Another World",
+      "b": "ReZero Starting Life in Another World"
+    },
+    {
+      "name": "indicazione di qualita",
+      "a": "Sentenced to Be a Hero 1080p",
+      "b": "Sentenced to Be a Hero"
+    },
+    {
+      "name": "accenti e caratteri speciali",
+      "a": "Fruits Basket: The Final",
+      "b": "Fruits Basket The Final"
+    },
+    {
+      "name": "combinazione: lingua piu punteggiatura",
+      "a": "Daemons of the Shadow Realm (ITA)",
+      "b": "Daemons of the Shadow Realm"
+    }
+  ],
+  "different": [
+    {
+      "name": "serie e suo seguito",
+      "a": "Naruto",
+      "b": "Naruto Shippuden"
+    },
+    {
+      "name": "stagioni diverse",
+      "a": "Attack on Titan",
+      "b": "Attack on Titan Season 2"
+    },
+    {
+      "name": "numero di stagione arabo",
+      "a": "Mushoku Tensei",
+      "b": "Mushoku Tensei 2"
+    },
+    {
+      "name": "parte dell'opera",
+      "a": "Kaguya-sama Love is War",
+      "b": "Kaguya-sama Love is War Ultra Romantic"
+    },
+    {
+      "name": "opere distinte dello stesso franchise",
+      "a": "Fate Zero",
+      "b": "Fate Stay Night"
+    },
+    {
+      "name": "film contro serie",
+      "a": "A Silent Voice",
+      "b": "A Silent Voice The Movie"
+    },
+    {
+      "name": "titoli semplicemente diversi",
+      "a": "Black Torch",
+      "b": "Blue Lock"
+    },
+    {
+      "name": "final season non e la serie base",
+      "a": "A Will Eternal",
+      "b": "A Will Eternal Final Season"
+    }
+  ]
+}

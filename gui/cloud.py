@@ -22,6 +22,7 @@ from pathlib import Path
 import httpx
 from PySide6.QtCore import QObject, QRunnable, QStandardPaths, Signal
 
+from .canonical import canonical_key
 from .merge import merge_favourite, merge_progress
 
 _AUTH_HOST = "https://identitytoolkit.googleapis.com/v1"
@@ -258,8 +259,11 @@ class CloudClient:
         further here is pushed up. Returns ``(history, favourites)`` to persist locally.
         """
         remote = self._db("data")
-        remote_history = remote.get("history") or {}
-        remote_favorites = remote.get("favourites") or {}
+        # Entries uploaded by a device that has not migrated yet still carry the old
+        # per-portal key. Re-key them here too, otherwise every sync would recreate the
+        # duplicates the canonical key exists to prevent.
+        remote_history = _canonicalise(remote.get("history") or {}, merge_progress)
+        remote_favorites = _canonicalise(remote.get("favourites") or {}, merge_favourite)
 
         merged_history: dict = {}
         for key in set(history_data) | set(remote_history):
@@ -309,3 +313,14 @@ class SyncWorker(QRunnable):
             self.signals.error.emit(str(exc))
         except Exception as exc:  # noqa: BLE001 - sync must never crash the app
             self.signals.error.emit(f"Sincronizzazione non riuscita: {exc}")
+
+
+def _canonicalise(entries: dict, merge) -> dict:
+    """Move a batch of entries onto the canonical key, merging any that collide."""
+    result: dict = {}
+    for key, entry in (entries or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        new_key = canonical_key(entry.get("title") or key) or key
+        result[new_key] = merge(result[new_key], entry) if new_key in result else entry
+    return result

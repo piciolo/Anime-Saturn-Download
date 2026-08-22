@@ -13,6 +13,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
 
+from .canonical import canonical_key
+from .merge import merge_progress
 from .net import sanitize_name
 
 # Below this fraction of the episode we treat it as "not really started"; at/above the
@@ -36,6 +38,8 @@ class WatchHistory:
         self._dir = Path(base) if base else (Path.home() / ".animesaturn_downloader")
         self._path = self._dir / "history.json"
         self._data: dict[str, dict] = self._load()
+        if self._migrate_keys():
+            self._save()
 
     # ------------------------------------------------------------------ #
     def _load(self) -> dict[str, dict]:
@@ -55,7 +59,35 @@ class WatchHistory:
 
     @staticmethod
     def _key(title: str) -> str:
-        return sanitize_name(title)
+        """Key an anime by its canonical identity, not by how a portal spells it."""
+        return canonical_key(title) or sanitize_name(title)
+
+    def _migrate_keys(self) -> bool:
+        """Re-key old entries onto the canonical key, once. True if anything changed.
+
+        Entries written before this change are keyed on the sanitised title, which differs
+        per portal. Re-keying them now means a second source will line up with the history
+        that already exists instead of starting a parallel one.
+
+        Two old entries can collapse onto the same key — the same anime saved under two
+        spellings. They are merged with the usual rules rather than one overwriting the
+        other, so the furthest-along progress survives.
+        """
+        migrated: dict[str, dict] = {}
+        changed = False
+        for key, entry in self._data.items():
+            title = entry.get("title") or key
+            new_key = self._key(title)
+            if new_key != key:
+                changed = True
+            if new_key in migrated:
+                migrated[new_key] = merge_progress(migrated[new_key], entry)
+                changed = True
+            else:
+                migrated[new_key] = entry
+        if changed:
+            self._data = migrated
+        return changed
 
     def _stamp(self) -> float:
         # Wall-clock time so ordering is correct across sessions: whatever you just
