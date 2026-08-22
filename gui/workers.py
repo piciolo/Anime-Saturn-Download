@@ -22,7 +22,11 @@ class SearchSignals(QObject):
 
 
 class SearchWorker(QRunnable):
-    """Run a search/browse query off the UI thread."""
+    """Run a search/browse query off the UI thread.
+
+    ``client`` may be a single portal or the source registry: both expose ``search``,
+    and the registry simply asks every portal and combines the answers.
+    """
 
     def __init__(
         self,
@@ -96,7 +100,12 @@ class EpisodesWorker(QRunnable):
 
     def run(self) -> None:
         try:
-            detail = self.client.fetch_anime_detail(self.anime.slug)
+            # Con piu' portali collegati, gli episodi vanno chiesti a quello da cui
+            # arriva questo anime, non al primo della lista.
+            if hasattr(self.client, "fetch_anime_detail_for"):
+                detail = self.client.fetch_anime_detail_for(self.anime)
+            else:
+                detail = self.client.fetch_anime_detail(self.anime.slug)
             episodes = [Episode.from_record(rec) for rec in detail["episodes"]]
             self.signals.results.emit(self.anime.key, episodes, detail.get("plot", ""))
         except Exception as exc:  # noqa: BLE001

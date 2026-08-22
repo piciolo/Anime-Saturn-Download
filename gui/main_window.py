@@ -35,6 +35,7 @@ from .flowlayout import FlowLayout
 from .account import AccountDialog
 from .cloud import CloudClient, CloudConfig, SyncWorker
 from .favorites import FavoritesStore
+from .sources import SourceRegistry
 from .history import WatchHistory, format_progress
 from .models import Anime, Episode
 from .net import (
@@ -131,6 +132,9 @@ class MainWindow(QMainWindow):
         self._suggest_map: dict[str, dict] = {}
         self._detail_total = 0
         self._poster_workers: set = set()
+        # I portali da cui cercare. Oggi ce n'e' uno solo, quindi il comportamento non
+        # cambia; il resto dell'app pero' non presuppone piu' quale sia.
+        self.sources = SourceRegistry(self.client)
         self.history = WatchHistory()
         self.favorites = FavoritesStore()
         self.cloud = CloudClient(CloudConfig())
@@ -691,7 +695,7 @@ class MainWindow(QMainWindow):
         if self._genres_loaded:
             return  # loaded once per session; the genre list is stable
         self.genres_status.setText("Caricamento generi…")
-        worker = GenresWorker(self.client)
+        worker = GenresWorker(self.sources.primary)
         worker.signals.results.connect(self._on_genres_results)
         worker.signals.error.connect(self._on_genres_error)
         self.io_pool.start(worker)
@@ -1116,7 +1120,7 @@ class MainWindow(QMainWindow):
         if len(query) < 2:
             return
         self._suggest_token += 1
-        worker = SuggestWorker(self.client, self._suggest_token, query)
+        worker = SuggestWorker(self.sources, self._suggest_token, query)
         worker.signals.results.connect(self._on_suggestions)
         self.io_pool.start(worker)
 
@@ -1219,7 +1223,7 @@ class MainWindow(QMainWindow):
 
     def _spawn_search(self) -> None:
         worker = SearchWorker(
-            self.client,
+            self.sources,
             self._search_token,
             title=self._query["title"] or None,
             sort=self._query["sort"],
@@ -1295,7 +1299,7 @@ class MainWindow(QMainWindow):
         self.range_from.setValue(1)
         self.range_to.setValue(count)
 
-        worker = EpisodesWorker(self.client, anime)
+        worker = EpisodesWorker(self.sources, anime)
         worker.signals.results.connect(self._on_episodes_results)
         worker.signals.error.connect(self._on_episodes_error)
         self.io_pool.start(worker)

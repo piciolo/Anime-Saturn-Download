@@ -23,6 +23,9 @@ class Anime:
     score: str
     plot: str = ""
     genres: list[str] = field(default_factory=list)
+    # Portale da cui arriva questo risultato. Il valore predefinito copre le voci
+    # salvate prima che esistessero piu' sorgenti: venivano tutte da AnimeSaturn.
+    source_id: str = "animesaturn"
 
     @property
     def path(self) -> str:
@@ -48,6 +51,7 @@ class Anime:
             score=str(record.get("score") or ""),
             plot=record.get("plot") or "",
             genres=list(record.get("genres") or []),
+            source_id=record.get("source_id") or "animesaturn",
         )
 
 
