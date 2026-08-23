@@ -111,9 +111,18 @@ class AnimeUnitySource(AnimeSource):
         )
         anime_id = record.get("id")
         slug = record.get("slug") or ""
+        # Portals list the same work under different languages — one uses the romanised
+        # Japanese title, the other the English one. Keeping every name AnimeUnity gives
+        # lets the merge recognise them as one anime instead of showing it twice.
+        aliases = [
+            str(v).strip()
+            for v in (record.get("title"), record.get("title_eng"), record.get("title_it"))
+            if v and str(v).strip() and str(v) != "None"
+        ]
         return {
             # Its episode endpoint is addressed as "<id>-<slug>", so that is the slug.
             "slug": f"{anime_id}-{slug}" if anime_id else slug,
+            "aliases": aliases,
             "title": str(title).strip(),
             "poster": record.get("imageurl") or "",
             "type": record.get("type") or "",

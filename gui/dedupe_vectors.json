@@ -1,0 +1,255 @@
+{
+  "_commento": [
+    "Casi che fissano come i risultati di portali diversi si fondono in uno solo.",
+    "Li eseguono sia l'app Windows (verify_dedupe.py) sia quella Android",
+    "(tool/verify_dedupe.dart): se le due implementazioni divergono, il test lo dice.",
+    "'expected' elenca i gruppi come indici dei record in ingresso."
+  ],
+  "cases": [
+    {
+      "name": "lo stesso anime scritto in due lingue diverse",
+      "records": [
+        {
+          "source_id": "animesaturn",
+          "title": "Akatsuki no Yona"
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Yona of the Dawn",
+          "aliases": [
+            "Yona of the Dawn",
+            "Akatsuki no Yona"
+          ]
+        }
+      ],
+      "expected": [
+        [
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Re:Zero, titolo inglese contro giapponese",
+      "records": [
+        {
+          "source_id": "animesaturn",
+          "title": "Re:ZERO -Starting Life in Another World-"
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Re:Zero kara Hajimeru Isekai Seikatsu",
+          "aliases": [
+            "Re:Zero kara Hajimeru Isekai Seikatsu",
+            "Re:ZERO -Starting Life in Another World-"
+          ]
+        }
+      ],
+      "expected": [
+        [
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "name": "stagioni distinte dalla sola punteggiatura non si fondono",
+      "records": [
+        {
+          "source_id": "animesaturn",
+          "title": "Kaguya-sama: Love is War"
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Kaguya-sama wa Kokurasetai: Tensai-tachi no Renai Zunousen",
+          "aliases": [
+            "Kaguya-sama wa Kokurasetai: Tensai-tachi no Renai Zunousen",
+            "Kaguya-sama: Love is War"
+          ]
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Kaguya-sama wa Kokurasetai? Tensai-tachi no Renai Zunousen",
+          "aliases": [
+            "Kaguya-sama wa Kokurasetai? Tensai-tachi no Renai Zunousen",
+            "Kaguya-sama: Love is War 2"
+          ]
+        }
+      ],
+      "expected": [
+        [
+          0,
+          1
+        ],
+        [
+          2
+        ]
+      ]
+    },
+    {
+      "name": "la stagione 2 non assorbe la 1 nemmeno arrivando per prima",
+      "records": [
+        {
+          "source_id": "animeunity",
+          "title": "Kaguya-sama wa Kokurasetai? Tensai-tachi no Renai Zunousen",
+          "aliases": [
+            "Kaguya-sama wa Kokurasetai? Tensai-tachi no Renai Zunousen",
+            "Kaguya-sama: Love is War 2"
+          ]
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Kaguya-sama wa Kokurasetai: Tensai-tachi no Renai Zunousen",
+          "aliases": [
+            "Kaguya-sama wa Kokurasetai: Tensai-tachi no Renai Zunousen",
+            "Kaguya-sama: Love is War"
+          ]
+        },
+        {
+          "source_id": "animesaturn",
+          "title": "Kaguya-sama: Love is War"
+        }
+      ],
+      "expected": [
+        [
+          0
+        ],
+        [
+          1,
+          2
+        ]
+      ]
+    },
+    {
+      "name": "un OVA non si confonde con la stagione da cui nasce",
+      "records": [
+        {
+          "source_id": "animesaturn",
+          "title": "Kaguya-sama: Love is War OVA"
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Kaguya-sama wa Kokurasetai? Tensai-tachi no Renai Zunousen OVA",
+          "aliases": [
+            "Kaguya-sama wa Kokurasetai? Tensai-tachi no Renai Zunousen OVA",
+            "Kaguya-sama: Love is War OVA"
+          ]
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Kaguya-sama wa Kokurasetai? Tensai-tachi no Renai Zunousen",
+          "aliases": [
+            "Kaguya-sama wa Kokurasetai? Tensai-tachi no Renai Zunousen",
+            "Kaguya-sama: Love is War 2"
+          ]
+        }
+      ],
+      "expected": [
+        [
+          0,
+          1
+        ],
+        [
+          2
+        ]
+      ]
+    },
+    {
+      "name": "una stagione e la sua seconda parte restano distinte",
+      "records": [
+        {
+          "source_id": "animesaturn",
+          "title": "Re:ZERO -Starting Life in Another World- 2"
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Re:Zero kara Hajimeru Isekai Seikatsu 2 Part 2",
+          "aliases": [
+            "Re:Zero kara Hajimeru Isekai Seikatsu 2 Part 2",
+            "Re:ZERO -Starting Life in Another World- 2 Part 2"
+          ]
+        }
+      ],
+      "expected": [
+        [
+          0
+        ],
+        [
+          1
+        ]
+      ]
+    },
+    {
+      "name": "senza titoli alternativi vale la regola di prima",
+      "records": [
+        {
+          "source_id": "animesaturn",
+          "title": "Naruto"
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Naruto"
+        }
+      ],
+      "expected": [
+        [
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "name": "anime diversi restano separati",
+      "records": [
+        {
+          "source_id": "animesaturn",
+          "title": "Naruto"
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Bleach"
+        }
+      ],
+      "expected": [
+        [
+          0
+        ],
+        [
+          1
+        ]
+      ]
+    },
+    {
+      "name": "gli alias si concatenano: A con B, B con C, tutti uno",
+      "records": [
+        {
+          "source_id": "animesaturn",
+          "title": "Titolo Uno"
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Titolo Due",
+          "aliases": [
+            "Titolo Due",
+            "Titolo Uno"
+          ]
+        },
+        {
+          "source_id": "animeunity",
+          "title": "Titolo Tre",
+          "aliases": [
+            "Titolo Tre",
+            "Titolo Due"
+          ]
+        }
+      ],
+      "expected": [
+        [
+          0,
+          1,
+          2
+        ]
+      ]
+    }
+  ]
+}

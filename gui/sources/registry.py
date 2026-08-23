@@ -14,6 +14,8 @@ Two rules the aggregation follows:
 
 from __future__ import annotations
 
+import re
+
 from ..canonical import canonical_key
 from ..net import AnimeSaturnClient
 from .animesaturn import AnimeSaturnSource
@@ -128,10 +130,14 @@ class SourceRegistry:
             if preferred is not None and source.id == preferred.id:
                 continue
             try:
+                # Si confronta con ogni nome che l'altro portale conosce, non col solo
+                # titolo mostrato: è la stessa ragione per cui i doppioni si fondono, e
+                # senza di essa il ripiego fallirebbe proprio quando i due siti chiamano
+                # l'anime in lingue diverse.
                 matches = [
                     record
                     for record in source.search(title)
-                    if canonical_key(record.get("title") or "") == wanted
+                    if wanted in _all_keys(record)
                 ]
                 for record in matches[:2]:  # a couple of candidates is plenty
                     detail = source.fetch_anime_detail(record.get("slug", ""))
@@ -158,6 +164,14 @@ class SourceRegistry:
                 pass
 
 
+def _all_keys(record: dict) -> set[str]:
+    """Ogni chiave con cui un risultato è riconoscibile: titolo mostrato e alternativi."""
+    names = [record.get("title") or ""] + list(record.get("aliases") or [])
+    keys = {canonical_key(n) for n in names if n}
+    keys.discard("")
+    return keys
+
+
 def _interleave(groups: list[list[dict]]) -> list[dict]:
     """Round-robin the groups, so no single portal fills the first page on its own."""
     merged: list[dict] = []
@@ -171,38 +185,98 @@ def _interleave(groups: list[list[dict]]) -> list[dict]:
 def _dedupe(records: list[dict]) -> list[dict]:
     """Collapse the same anime listed by several portals into one result.
 
-    Two records are the same anime when they share the canonical key — the identity that
-    ignores how a portal spells a title. The first occurrence wins the card (sources are
-    tried in preference order), gains any field the other filled in, and keeps the full
-    list of portals that have it under ``sources``.
+    Matching is done on every name a record is known by, not just the one shown. Portals
+    disagree on language — one lists "Yona of the Dawn", the other "Akatsuki no Yona" —
+    and those texts share nothing, so comparing display titles alone would show the anime
+    twice, with two separate resume points.
 
-    That list is what makes the fallback possible later: when one portal cannot play an
-    episode, the app already knows who else has the series.
+    The first occurrence wins the card (sources are in preference order), gains any field
+    the other filled in, and keeps the list of portals that have it. That list is what
+    makes the fallback possible when one portal cannot play an episode.
     """
-    merged: dict[str, dict] = {}
-    order: list[str] = []
+    merged: dict[int, dict] = {}
+    key_to_group: dict[str, int] = {}
+    order: list[int] = []
+
     for record in records:
-        key = canonical_key(record.get("title") or "") or record.get("slug") or ""
+        keys = _all_keys(record)
+        if not keys:
+            keys = {record.get("slug") or ""}
+
+        # Among the groups this record could join, take the first that does not
+        # disagree with it about the season.
+        candidates = []
+        for k in keys:
+            g = key_to_group.get(k)
+            if g is not None and g not in candidates:
+                candidates.append(g)
+        group = next(
+            (g for g in candidates if not _season_conflict(keys, merged[g]["_keys"])),
+            None,
+        )
         entry = {
             "source_id": record.get("source_id", ""),
             "source_label": record.get("source_label", ""),
             "slug": record.get("slug", ""),
             "episodes_count": record.get("episodes_count") or 0,
         }
-        if key not in merged:
-            record = dict(record)
-            record["sources"] = [entry]
-            merged[key] = record
-            order.append(key)
-            continue
-        winner = merged[key]
-        if all(s["source_id"] != entry["source_id"] for s in winner["sources"]):
-            winner["sources"].append(entry)
-        # Fill in whatever the winning portal left empty: a poster or plot from the
-        # other one is better than none.
-        for field in ("poster", "plot", "year", "score", "type"):
-            if not winner.get(field) and record.get(field):
-                winner[field] = record[field]
-        if not winner.get("episodes_count") and record.get("episodes_count"):
-            winner["episodes_count"] = record["episodes_count"]
-    return [merged[k] for k in order]
+
+        if group is None:
+            group = len(merged)
+            winner = dict(record)
+            winner["_keys"] = set(keys)
+            winner["sources"] = [entry]
+            merged[group] = winner
+            order.append(group)
+        else:
+            winner = merged[group]
+            winner["_keys"].update(keys)
+            if all(s["source_id"] != entry["source_id"] for s in winner["sources"]):
+                winner["sources"].append(entry)
+            # Fill in whatever the winning portal left empty: a poster or plot from the
+            # other one is better than none.
+            for field in ("poster", "plot", "year", "score", "type"):
+                if not winner.get(field) and record.get(field):
+                    winner[field] = record[field]
+            if not winner.get("episodes_count") and record.get("episodes_count"):
+                winner["episodes_count"] = record["episodes_count"]
+
+        # Every name this record is known by now points at the group, so a later record
+        # sharing any one of them lands here too.
+        for k in keys:
+            key_to_group.setdefault(k, group)
+
+    result = []
+    for g in order:
+        winner = merged[g]
+        winner.pop("_keys", None)
+        result.append(winner)
+    return result
+
+
+# A trailing number is the season: "…loveiswar" against "…loveiswar2".
+_TRAILING_NUMBER = re.compile(r"^(.*?)([0-9]+)$")
+
+
+def _season_conflict(keys_a: set[str], keys_b: set[str]) -> bool:
+    """True when two sets of names describe the same work in *different* seasons.
+
+    Portals sometimes distinguish seasons by punctuation alone — one franchise separates
+    them with ":" and "?" — and punctuation is deliberately dropped from the key, so those
+    two names collapse into one. Without this check the second season would be absorbed
+    into the first through that shared name and play the wrong episodes.
+
+    The season number decides it, because it is the one part of a title never discarded:
+    if the same base name appears with two different numbers, these are two works.
+    """
+    seasons_a: dict[str, set[str]] = {}
+    for key in keys_a:
+        m = _TRAILING_NUMBER.match(key)
+        base, season = (m.group(1), m.group(2)) if m else (key, "")
+        seasons_a.setdefault(base, set()).add(season)
+    for key in keys_b:
+        m = _TRAILING_NUMBER.match(key)
+        base, season = (m.group(1), m.group(2)) if m else (key, "")
+        if base in seasons_a and season not in seasons_a[base]:
+            return True
+    return False
