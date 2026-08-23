@@ -95,6 +95,7 @@ class FavoritesStore:
         is_favorite: bool,
         slug: str = "",
         poster: str = "",
+        source_id: str = "",
     ) -> None:
         """Mark an anime as favourite or not (kept as a tombstone when removed)."""
         if not title:
@@ -106,6 +107,10 @@ class FavoritesStore:
                 "title": title,
                 "slug": slug or entry.get("slug", ""),
                 "poster": poster or entry.get("poster", ""),
+                # Senza il portale, riaprire il preferito lo farebbe cercare sul sito
+                # sbagliato: uno slug di AnimeUnity chiesto ad AnimeSaturn non da'
+                # episodi.
+                "source_id": source_id or entry.get("source_id", ""),
                 "is_favourite": bool(is_favorite),
                 "toggled_at": time.time(),
             }
@@ -113,11 +118,17 @@ class FavoritesStore:
         self._data[key] = entry
         self._save()
 
-    def toggle(self, *, title: str, slug: str = "", poster: str = "") -> bool:
+    def toggle(
+        self, *, title: str, slug: str = "", poster: str = "", source_id: str = ""
+    ) -> bool:
         """Flip the favourite state and return the new one."""
         new_state = not self.is_favorite(title)
         self.set_favorite(
-            title=title, is_favorite=new_state, slug=slug, poster=poster
+            title=title,
+            is_favorite=new_state,
+            slug=slug,
+            poster=poster,
+            source_id=source_id,
         )
         return new_state
 

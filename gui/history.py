@@ -109,6 +109,7 @@ class WatchHistory:
         poster: str = "",
         watch_path: str = "",
         file_path: str = "",
+        source_id: str = "",
     ) -> None:
         """Upsert the resume point for an anime.
 
@@ -125,6 +126,10 @@ class WatchHistory:
                 "title": title,
                 "slug": slug or entry.get("slug", ""),
                 "poster": poster or entry.get("poster", ""),
+                # Il portale da cui viene l'episodio: alla ripresa si riparte da
+                # quello, invece di provare il primo e scoprire solo dopo che era
+                # l'altro.
+                "source_id": source_id or entry.get("source_id", ""),
                 "total_episodes": total_episodes or entry.get("total_episodes", 0),
                 "updated_at": self._stamp(),
             }

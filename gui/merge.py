@@ -11,7 +11,9 @@ from __future__ import annotations
 
 # Metadata is descriptive, not progress: the winner keeps its own values but borrows any
 # it is missing from the loser, so a poster fetched on one device is never lost.
-_META_FIELDS = ("title", "slug", "poster", "watch_path")
+# ``source_id`` e' il portale di provenienza: se un dispositivo lo conosce e
+# l'altro no, chi lo sa lo completa per chi non lo sa.
+_META_FIELDS = ("title", "slug", "poster", "watch_path", "source_id")
 _META_NUMERIC = ("total_episodes",)
 
 

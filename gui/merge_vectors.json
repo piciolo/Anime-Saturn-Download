@@ -21,77 +21,286 @@
   "progress": [
     {
       "name": "posizione piu' avanti nello stesso episodio",
-      "a": {"episode_number": "5", "position_ms": 180000, "completed": false, "updated_at": 1000.0},
-      "b": {"episode_number": "5", "position_ms": 720000, "completed": false, "updated_at": 900.0},
-      "expect": {"episode_number": "5", "position_ms": 720000}
+      "a": {
+        "episode_number": "5",
+        "position_ms": 180000,
+        "completed": false,
+        "updated_at": 1000.0
+      },
+      "b": {
+        "episode_number": "5",
+        "position_ms": 720000,
+        "completed": false,
+        "updated_at": 900.0
+      },
+      "expect": {
+        "episode_number": "5",
+        "position_ms": 720000
+      }
     },
     {
       "name": "episodio piu' avanti vince anche se salvato prima",
-      "a": {"episode_number": "7", "position_ms": 5000, "completed": false, "updated_at": 500.0},
-      "b": {"episode_number": "4", "position_ms": 1200000, "completed": false, "updated_at": 999.0},
-      "expect": {"episode_number": "7", "position_ms": 5000}
+      "a": {
+        "episode_number": "7",
+        "position_ms": 5000,
+        "completed": false,
+        "updated_at": 500.0
+      },
+      "b": {
+        "episode_number": "4",
+        "position_ms": 1200000,
+        "completed": false,
+        "updated_at": 999.0
+      },
+      "expect": {
+        "episode_number": "7",
+        "position_ms": 5000
+      }
     },
     {
       "name": "episodio finito su un lato, a meta' sull'altro lato ma stesso episodio",
-      "a": {"episode_number": "3", "position_ms": 1400000, "completed": true, "updated_at": 100.0},
-      "b": {"episode_number": "3", "position_ms": 300000, "completed": false, "updated_at": 200.0},
-      "expect": {"episode_number": "3", "position_ms": 1400000, "completed": true}
+      "a": {
+        "episode_number": "3",
+        "position_ms": 1400000,
+        "completed": true,
+        "updated_at": 100.0
+      },
+      "b": {
+        "episode_number": "3",
+        "position_ms": 300000,
+        "completed": false,
+        "updated_at": 200.0
+      },
+      "expect": {
+        "episode_number": "3",
+        "position_ms": 1400000,
+        "completed": true
+      }
     },
     {
       "name": "a parita' di episodio e posizione decide l'orario piu' recente",
-      "a": {"episode_number": "2", "position_ms": 60000, "completed": false, "updated_at": 100.0},
-      "b": {"episode_number": "2", "position_ms": 60000, "completed": false, "updated_at": 300.0},
-      "expect": {"episode_number": "2", "position_ms": 60000, "updated_at": 300.0}
+      "a": {
+        "episode_number": "2",
+        "position_ms": 60000,
+        "completed": false,
+        "updated_at": 100.0
+      },
+      "b": {
+        "episode_number": "2",
+        "position_ms": 60000,
+        "completed": false,
+        "updated_at": 300.0
+      },
+      "expect": {
+        "episode_number": "2",
+        "position_ms": 60000,
+        "updated_at": 300.0
+      }
     },
     {
       "name": "il lato senza dati non cancella quello con dati",
-      "a": {"episode_number": "", "position_ms": 0, "completed": false, "updated_at": 900.0},
-      "b": {"episode_number": "6", "position_ms": 400000, "completed": false, "updated_at": 100.0},
-      "expect": {"episode_number": "6", "position_ms": 400000}
+      "a": {
+        "episode_number": "",
+        "position_ms": 0,
+        "completed": false,
+        "updated_at": 900.0
+      },
+      "b": {
+        "episode_number": "6",
+        "position_ms": 400000,
+        "completed": false,
+        "updated_at": 100.0
+      },
+      "expect": {
+        "episode_number": "6",
+        "position_ms": 400000
+      }
     },
     {
       "name": "episodi con numerazione decimale (7.5 sta fra 7 e 8)",
-      "a": {"episode_number": "7.5", "position_ms": 10000, "completed": false, "updated_at": 100.0},
-      "b": {"episode_number": "7", "position_ms": 900000, "completed": false, "updated_at": 200.0},
-      "expect": {"episode_number": "7.5", "position_ms": 10000}
+      "a": {
+        "episode_number": "7.5",
+        "position_ms": 10000,
+        "completed": false,
+        "updated_at": 100.0
+      },
+      "b": {
+        "episode_number": "7",
+        "position_ms": 900000,
+        "completed": false,
+        "updated_at": 200.0
+      },
+      "expect": {
+        "episode_number": "7.5",
+        "position_ms": 10000
+      }
     },
     {
       "name": "etichetta non numerica: non e' confrontabile, decide l'orario",
-      "a": {"episode_number": "OVA", "position_ms": 30000, "completed": false, "updated_at": 400.0},
-      "b": {"episode_number": "9", "position_ms": 30000, "completed": false, "updated_at": 100.0},
-      "expect": {"episode_number": "OVA", "position_ms": 30000}
+      "a": {
+        "episode_number": "OVA",
+        "position_ms": 30000,
+        "completed": false,
+        "updated_at": 400.0
+      },
+      "b": {
+        "episode_number": "9",
+        "position_ms": 30000,
+        "completed": false,
+        "updated_at": 100.0
+      },
+      "expect": {
+        "episode_number": "OVA",
+        "position_ms": 30000
+      }
     },
     {
       "name": "i metadati mancanti nel vincitore si prendono dal perdente",
-      "a": {"episode_number": "5", "position_ms": 500000, "completed": false, "updated_at": 900.0, "title": "Anime", "poster": "", "total_episodes": 0},
-      "b": {"episode_number": "5", "position_ms": 100000, "completed": false, "updated_at": 100.0, "title": "Anime", "poster": "p.jpg", "total_episodes": 12},
-      "expect": {"episode_number": "5", "position_ms": 500000, "poster": "p.jpg", "total_episodes": 12}
+      "a": {
+        "episode_number": "5",
+        "position_ms": 500000,
+        "completed": false,
+        "updated_at": 900.0,
+        "title": "Anime",
+        "poster": "",
+        "total_episodes": 0
+      },
+      "b": {
+        "episode_number": "5",
+        "position_ms": 100000,
+        "completed": false,
+        "updated_at": 100.0,
+        "title": "Anime",
+        "poster": "p.jpg",
+        "total_episodes": 12
+      },
+      "expect": {
+        "episode_number": "5",
+        "position_ms": 500000,
+        "poster": "p.jpg",
+        "total_episodes": 12
+      }
     },
     {
       "name": "fondere un record con se stesso non cambia nulla",
-      "a": {"episode_number": "8", "position_ms": 123456, "completed": false, "updated_at": 555.0},
-      "b": {"episode_number": "8", "position_ms": 123456, "completed": false, "updated_at": 555.0},
-      "expect": {"episode_number": "8", "position_ms": 123456, "updated_at": 555.0}
+      "a": {
+        "episode_number": "8",
+        "position_ms": 123456,
+        "completed": false,
+        "updated_at": 555.0
+      },
+      "b": {
+        "episode_number": "8",
+        "position_ms": 123456,
+        "completed": false,
+        "updated_at": 555.0
+      },
+      "expect": {
+        "episode_number": "8",
+        "position_ms": 123456,
+        "updated_at": 555.0
+      }
+    },
+    {
+      "name": "il portale manca al vincitore e viene preso dal perdente",
+      "a": {
+        "episode_number": "5",
+        "position_ms": 100,
+        "completed": false,
+        "updated_at": 1000.0
+      },
+      "b": {
+        "episode_number": "3",
+        "position_ms": 100,
+        "completed": false,
+        "updated_at": 900.0,
+        "source_id": "animeunity"
+      },
+      "expect": {
+        "episode_number": "5",
+        "source_id": "animeunity"
+      }
+    },
+    {
+      "name": "il portale del vincitore non viene sovrascritto",
+      "a": {
+        "episode_number": "5",
+        "position_ms": 100,
+        "completed": false,
+        "updated_at": 1000.0,
+        "source_id": "animesaturn"
+      },
+      "b": {
+        "episode_number": "3",
+        "position_ms": 100,
+        "completed": false,
+        "updated_at": 900.0,
+        "source_id": "animeunity"
+      },
+      "expect": {
+        "episode_number": "5",
+        "source_id": "animesaturn"
+      }
     }
   ],
   "favourites": [
     {
       "name": "rimozione piu' recente vince: il preferito resta tolto",
-      "a": {"is_favourite": true, "toggled_at": 100.0},
-      "b": {"is_favourite": false, "toggled_at": 200.0},
-      "expect": {"is_favourite": false}
+      "a": {
+        "is_favourite": true,
+        "toggled_at": 100.0
+      },
+      "b": {
+        "is_favourite": false,
+        "toggled_at": 200.0
+      },
+      "expect": {
+        "is_favourite": false
+      }
     },
     {
       "name": "aggiunta piu' recente vince",
-      "a": {"is_favourite": false, "toggled_at": 100.0},
-      "b": {"is_favourite": true, "toggled_at": 200.0},
-      "expect": {"is_favourite": true}
+      "a": {
+        "is_favourite": false,
+        "toggled_at": 100.0
+      },
+      "b": {
+        "is_favourite": true,
+        "toggled_at": 200.0
+      },
+      "expect": {
+        "is_favourite": true
+      }
     },
     {
       "name": "a parita' di orario si preferisce lo stato conservativo (resta preferito)",
-      "a": {"is_favourite": true, "toggled_at": 300.0},
-      "b": {"is_favourite": false, "toggled_at": 300.0},
-      "expect": {"is_favourite": true}
+      "a": {
+        "is_favourite": true,
+        "toggled_at": 300.0
+      },
+      "b": {
+        "is_favourite": false,
+        "toggled_at": 300.0
+      },
+      "expect": {
+        "is_favourite": true
+      }
+    },
+    {
+      "name": "il portale di un preferito viene colmato dall'altro dispositivo",
+      "a": {
+        "is_favourite": true,
+        "toggled_at": 200.0
+      },
+      "b": {
+        "is_favourite": true,
+        "toggled_at": 100.0,
+        "source_id": "animeunity"
+      },
+      "expect": {
+        "is_favourite": true,
+        "source_id": "animeunity"
+      }
     }
   ]
 }

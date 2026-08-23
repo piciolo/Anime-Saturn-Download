@@ -608,7 +608,10 @@ class MainWindow(QMainWindow):
         if anime is None:
             return
         self.favorites.toggle(
-            title=anime.title, slug=anime.slug, poster=anime.poster
+            title=anime.title,
+            slug=anime.slug,
+            poster=anime.poster,
+            source_id=anime.source_id,
         )
         self._update_favorite_button()
         if self.tabs.currentIndex() == self._favorites_tab_index:
@@ -654,6 +657,9 @@ class MainWindow(QMainWindow):
                 episodes_count=0,
                 year="",
                 score="",
+                # Le voci salvate prima che esistessero piu' portali non lo hanno:
+                # venivano tutte da AnimeSaturn.
+                source_id=entry.get("source_id") or "animesaturn",
             )
             card = AnimeCard(anime, self.client, self.io_pool)
             card.clicked.connect(self._open_detail)
@@ -941,6 +947,7 @@ class MainWindow(QMainWindow):
             episodes_count=int(entry.get("total_episodes") or 0),
             year="",
             score="",
+            source_id=entry.get("source_id") or "animesaturn",
         )
         self.tabs.setCurrentIndex(0)  # the detail page lives in the Catalogo tab
         self._open_detail(anime)
@@ -1160,6 +1167,7 @@ class MainWindow(QMainWindow):
                 episodes_count=record["episodes_count"],
                 year=record["year"],
                 score="",
+                source_id=record.get("source_id") or "animesaturn",
             )
         )
 
@@ -1516,6 +1524,7 @@ class MainWindow(QMainWindow):
             poster=player.poster,
             watch_path=player.episode.watch_path,
             file_path=player.local_path,
+            source_id=player.source_id,
         )
 
     def _advance_player(self, player) -> None:
