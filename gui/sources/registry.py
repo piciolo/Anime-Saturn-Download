@@ -96,8 +96,41 @@ class SourceRegistry:
         return source.fetch_anime_detail(slug) if source else {}
 
     def fetch_anime_detail_for(self, anime) -> dict:
-        """Episodes for an anime, asked of the portal that listed it."""
-        return self.fetch_anime_detail(anime.slug, getattr(anime, "source_id", ""))
+        """Episodes for an anime, asked of the portal that listed it.
+
+        A portal can carry the listing and no episodes at all -- a season announced
+        but not yet released, most often the dubbed edition. Until now that left the
+        page simply empty, even when the other portal had the episodes. Playback has
+        had this fallback for a while; the anime page had not.
+
+        The dubbed flag is carried across deliberately. The canonical key drops the
+        language marker on purpose, so "X" and "X (ITA)" look identical to it: without
+        this guard a dubbed page would quietly fill with subtitled episodes.
+        """
+        detail = self.fetch_anime_detail(anime.slug, getattr(anime, "source_id", ""))
+        if detail.get("episodes"):
+            return detail
+
+        wanted = canonical_key(getattr(anime, "title", "") or "")
+        if not wanted:
+            return detail
+        dubbed = bool(getattr(anime, "dubbed", False))
+        origin = getattr(anime, "source_id", "")
+        for source in self._sources:
+            if source.id == origin:
+                continue
+            try:
+                for record in source.search(anime.title):
+                    if bool(record.get("dubbed")) != dubbed:
+                        continue
+                    if wanted not in _all_keys(record):
+                        continue
+                    other = source.fetch_anime_detail(record.get("slug", ""))
+                    if other.get("episodes"):
+                        return other
+            except Exception:  # noqa: BLE001 - a failing portal must not empty the page
+                continue
+        return detail
 
     def resolve_download_url(self, watch_path: str, source_id: str = "") -> str:
         source = self.get(source_id)

@@ -130,21 +130,29 @@ class AnimeUnityClient:
         order: str | bool = False,
         offset: int = 0,
         dubbed: bool = False,
+        anime_type: str = "",
+        year: str = "",
+        status: str = "",
+        season: str = "",
     ) -> list[dict]:
         """Query the archive endpoint and return the raw records list.
 
         ``title`` empty/None with an ``order`` acts as a catalogue browse.
         """
+        # I campi vuoti restano ``False``: e' cosi' che l'archivio intende "nessun
+        # vincolo". ``genres`` non e' fra questi di proposito -- il portale risponde
+        # 500 sia a un nome sia a una lista di nomi, quindi quel filtro si applica
+        # sui risultati invece che nella richiesta.
         body = {
             "title": title if title else False,
-            "type": False,
-            "year": False,
+            "type": anime_type or False,
+            "year": year or False,
             "order": order,
-            "status": False,
+            "status": status or False,
             "genres": False,
             "offset": offset,
             "dubbed": 1 if dubbed else False,
-            "season": False,
+            "season": season or False,
         }
         payload = self._post_archive(body)
         records = payload.get("records", payload if isinstance(payload, list) else [])

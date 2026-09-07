@@ -19,6 +19,81 @@ from .animeunity_client import AnimeUnityClient
 from .base import AnimeSource
 
 
+# --- Traduzione dei filtri verso il vocabolario di AnimeUnity --------------- #
+#
+# Le due dimensioni parlano lingue diverse: AnimeSaturn identifica tipo, stato e
+# genere con codici numerici suoi, AnimeUnity con parole. Le corrispondenze qui
+# sotto sono state ricavate interrogando il portale, non a memoria: i nomi dei
+# generi sono quelli che compaiono davvero nei suoi record.
+#
+# Cio' che non si sa tradurre NON viene ignorato: la ricerca su questo portale
+# viene saltata del tutto. Restituire risultati non filtrati sarebbe peggio che
+# non restituirne -- e' esattamente il difetto per cui, filtrando per anno, si
+# vedevano anime di altri anni.
+_TYPE_MAP = {"1": "TV", "2": "Movie", "3": "OVA", "4": "Special", "5": "ONA"}
+_STATE_MAP = {"0": "In Corso", "1": "Terminato"}
+_SEASON_MAP = {
+    "spring": "Primavera",
+    "summer": "Estate",
+    "fall": "Autunno",
+    "winter": "Inverno",
+}
+# Genere di AnimeSaturn (id) -> nome usato da AnimeUnity. Le voci assenti sono
+# volute: per quei generi il portale non ha un equivalente verificato.
+_GENRE_MAP = {
+    "1": "Action", "2": "Adventure", "3": "Martial Arts", "4": "Comedy",
+    "7": "Drama", "8": "Ecchi", "9": "Fantasy", "10": "Game", "11": "Harem",
+    "12": "Historical", "13": "Horror", "14": "Josei", "18": "Mecha",
+    "19": "Military", "20": "Music", "21": "Mystery", "22": "Parody",
+    "24": "Psychological", "25": "Romance", "26": "Samurai", "27": "School",
+    "28": "Sci-fi", "29": "Seinen", "30": "Shoujo", "31": "Girls Love",
+    "32": "Shounen", "33": "Boys Love", "34": "Slice of Life", "35": "Space",
+    "36": "Sports", "37": "Supernatural", "38": "Super Power", "39": "Thriller",
+    "40": "Vampire", "41": "Boys Love", "42": "Girls Love", "43": "Hentai",
+    "46": "Romance", "48": "Racing", "49": "Isekai",
+}
+
+
+def _tradotti(valori: list[str], tabella: dict[str, str]) -> list[str] | None:
+    """I valori tradotti, o ``None`` se anche uno solo non ha corrispondenza."""
+    fuori = [tabella.get(str(v)) for v in valori]
+    return None if any(x is None for x in fuori) else fuori
+
+
+def _record_passa(record: dict, richiesti: dict[str, list[str]]) -> bool:
+    """Controlla il record contro i filtri, qualunque cosa abbia fatto il portale.
+
+    E' la garanzia: l'API accetta un valore solo per campo, quindi con una scelta
+    multipla il vincolo non puo' viaggiare nella richiesta. Qui invece vale sempre.
+    """
+    anni = richiesti.get("year") or []
+    if anni and str(record.get("date") or "")[:4] not in {str(a) for a in anni}:
+        return False
+
+    tipi = _tradotti(richiesti.get("type") or [], _TYPE_MAP)
+    if tipi and str(record.get("type") or "") not in tipi:
+        return False
+
+    stati = _tradotti(richiesti.get("state") or [], _STATE_MAP)
+    if stati and str(record.get("status") or "") not in stati:
+        return False
+
+    stagioni = _tradotti(richiesti.get("season") or [], _SEASON_MAP)
+    if stagioni and str(record.get("season") or "") not in stagioni:
+        return False
+
+    generi = _tradotti(richiesti.get("category") or [], _GENRE_MAP)
+    if generi:
+        suoi = {
+            g.get("name")
+            for g in (record.get("genres") or [])
+            if isinstance(g, dict)
+        }
+        if not suoi.intersection(generi):
+            return False
+    return True
+
+
 class AnimeUnitySource(AnimeSource):
     """The second portal, so an anime missing from one site can be found on the other."""
 
@@ -41,9 +116,40 @@ class AnimeUnitySource(AnimeSource):
         # AnimeUnity pages by offset rather than page number, and browses by "order".
         offset = max(page - 1, 0) * 30
         order = {"ongoing": "Popolarita", "newest": "Ultime Uscite"}.get(sort, False)
+
+        richiesti = {k: [str(x) for x in v] for k, v in (filters or {}).items() if v}
+        # La lingua originale non esiste fra i dati di questo portale: se e'
+        # richiesta, questa ricerca non e' esprimibile qui.
+        if richiesti.get("language"):
+            return []
+        for chiave, tabella in (
+            ("type", _TYPE_MAP),
+            ("state", _STATE_MAP),
+            ("season", _SEASON_MAP),
+            ("category", _GENRE_MAP),
+        ):
+            if richiesti.get(chiave) and _tradotti(richiesti[chiave], tabella) is None:
+                return []
+
+        # Un solo valore viaggia nella richiesta; con una scelta multipla il campo
+        # resta libero e a decidere e' il controllo sui risultati.
+        def uno(chiave: str, tabella: dict[str, str] | None = None) -> str:
+            valori = richiesti.get(chiave) or []
+            if len(valori) != 1:
+                return ""
+            return tabella[valori[0]] if tabella else valori[0]
+
         records = self.client.search(
-            title or None, order=order, offset=offset, dubbed=(dub == "1")
+            title or None,
+            order=order,
+            offset=offset,
+            dubbed=(dub == "1"),
+            anime_type=uno("type", _TYPE_MAP),
+            year=uno("year"),
+            status=uno("state", _STATE_MAP),
+            season=uno("season", _SEASON_MAP),
         )
+        records = [r for r in records if _record_passa(r, richiesti)]
         return self.tag([self._to_card(r) for r in records])
 
     def suggest(self, query: str) -> list[dict]:
