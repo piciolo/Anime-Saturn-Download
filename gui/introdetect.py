@@ -13,6 +13,10 @@ idea Plex/Jellyfin use. Results (and the reference fingerprint) are cached per s
 from __future__ import annotations
 
 import json
+import logging
+import os
+import tempfile
+import time
 from pathlib import Path
 
 try:  # numpy powers the fingerprinting; if it fails to load the app must still run
@@ -33,8 +37,11 @@ from PySide6.QtCore import (
 )
 from PySide6.QtMultimedia import QAudioDecoder, QAudioFormat
 
+from .mp4index import Mp4IndexError, fetch_episode_audio
 from .net import AnimeSaturnClient, sanitize_name
 from .workers import ResolveWorker
+
+_log = logging.getLogger(__name__)
 
 SR = 16000
 FRAME = int(SR * 0.2)      # 0.2 s frames -> 5 fps
@@ -173,6 +180,68 @@ class _MatchWorker(QRunnable):
             self.signals.done.emit((0, 0, None))
 
 
+class _AudioFetchSignals(QObject):
+    done = Signal(str)    # path to a temporary ADTS file
+    error = Signal(str)   # why the fast path could not be taken
+
+
+class _AudioFetchWorker(QRunnable):
+    """Fetch only the episode's audio, off the UI thread, into a temporary file.
+
+    Both halves have to be off the main thread: the requests block, and so does
+    stitching several megabytes together. What comes back is an ordinary .aac file, so
+    the decoding that follows is exactly what it was before.
+    """
+
+    def __init__(self, url: str, seconds: int) -> None:
+        super().__init__()
+        self.url = url
+        self.seconds = seconds
+        self.signals = _AudioFetchSignals()
+
+    @staticmethod
+    def _sweep_leftovers() -> None:
+        """Delete temporary audio left behind by earlier runs.
+
+        A file the decoder still had open when the delete was attempted survives it.
+        Without this sweep they would pile up at several megabytes each.
+        """
+        cutoff = time.time() - 3600
+        try:
+            stale = Path(tempfile.gettempdir()).glob("animesaturn-intro-*.aac")
+            for leftover in stale:
+                try:
+                    if leftover.stat().st_mtime < cutoff:
+                        leftover.unlink()
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
+    def run(self) -> None:
+        path = ""
+        self._sweep_leftovers()
+        try:
+            report = fetch_episode_audio(self.url, self.seconds)
+            handle, path = tempfile.mkstemp(prefix="animesaturn-intro-", suffix=".aac")
+            with os.fdopen(handle, "wb") as out:
+                out.write(report.adts)
+            _log.info(
+                "intro audio: %.1f MB in %d requests, %.1fs",
+                report.bytes_downloaded / 1048576,
+                report.requests,
+                report.seconds,
+            )
+            self.signals.done.emit(path)
+        except Exception as exc:  # noqa: BLE001 - any failure falls back to streaming
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            self.signals.error.emit(f"{type(exc).__name__}: {exc}")
+
+
 class IntroDetector(QObject):
     """Detect the opening of ``cur_ep`` by matching its audio against ``ref_ep``."""
 
@@ -192,6 +261,11 @@ class IntroDetector(QObject):
         self._decoder = None
         self._samples_cur = None
         self._fp_ref = None
+        # The decode that follows a fetch is driven by bound-method slots, so where it
+        # should deliver its result is held here. Only ever one at a time: the current
+        # episode is decoded and matched before any reference is fetched.
+        self._pending_cb = None
+        self._pending_url = ""
         base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         root = Path(base) if base else Path.home() / ".animesaturn_downloader"
         self._dir = root / "intro_cache"
@@ -303,7 +377,35 @@ class IntroDetector(QObject):
 
     # ------------------------------------------------------------------ #
     def _decode(self, url, callback) -> None:
-        """Decode ~DECODE_SEC of audio (mono 16 kHz) asynchronously, then call back."""
+        """Get ~DECODE_SEC of audio (mono 16 kHz) asynchronously, then call back.
+
+        The audio is fetched on its own first. Handing the URL straight to the decoder
+        makes it pull the whole interleaved file -- hundreds of megabytes to reach six
+        of audio -- whereas reading the file's own index and asking for the audio's
+        byte ranges costs about 7.5 MB and two seconds (see ``gui/mp4index.py``).
+
+        If that path fails for any reason -- an index that cannot be read, a server
+        that ignores byte ranges -- the old route is taken instead, so detection costs
+        what it always cost rather than stopping.
+        """
+        self._pending_cb = callback
+        self._pending_url = url
+        worker = _AudioFetchWorker(url, DECODE_SEC)
+        # Bound methods, not lambdas, so the slots run queued on THIS (main) thread:
+        # QAudioDecoder must be created and used on the thread with the event loop.
+        worker.signals.done.connect(self._on_audio_ready)
+        worker.signals.error.connect(self._on_audio_failed)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_audio_ready(self, path: str) -> None:
+        self._run_decoder(QUrl.fromLocalFile(path), self._pending_cb, Path(path))
+
+    def _on_audio_failed(self, message: str) -> None:
+        _log.info("intro audio fetch failed, streaming instead: %s", message)
+        self._run_decoder(QUrl(self._pending_url), self._pending_cb, None)
+
+    def _run_decoder(self, source: QUrl, callback, cleanup: Path | None) -> None:
+        """Decode ~DECODE_SEC of audio (mono 16 kHz) from ``source``, then call back."""
         decoder = QAudioDecoder(self)
         self._decoder = decoder  # keep a reference alive
         fmt = QAudioFormat()
@@ -311,7 +413,7 @@ class IntroDetector(QObject):
         fmt.setChannelCount(1)
         fmt.setSampleFormat(QAudioFormat.Float)
         decoder.setAudioFormat(fmt)
-        decoder.setSource(QUrl(url))
+        decoder.setSource(source)
         chunks: list = []
         total = [0]
         done = [False]
@@ -325,6 +427,14 @@ class IntroDetector(QObject):
                 decoder.stop()
             except RuntimeError:
                 pass
+            # The temporary file has done its job and weighs several megabytes. On
+            # Windows a handle the decoder has not released yet refuses the delete;
+            # the sweep in _AudioFetchWorker collects whatever is left behind.
+            if cleanup is not None:
+                try:
+                    cleanup.unlink(missing_ok=True)
+                except OSError:
+                    pass
             callback(np.concatenate(chunks) if chunks else np.zeros(0, np.float32))
 
         def on_buffer():
