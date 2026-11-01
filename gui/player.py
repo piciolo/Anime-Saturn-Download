@@ -658,6 +658,10 @@ class PlayerWindow(QDialog):
         self._resume_stable = 0
         self._resume_timer.stop()  # _start() re-arms it for the new episode
         self._token = object()
+        # The detection in flight belongs to the episode being left: its result is
+        # already discarded by the token, but the fetch behind it is not, and neither
+        # is the audio it has decoded.
+        self._stop_intro_detection()
         self._media_url = ""
         self._extra_start = 0
         self._op_start = 0
@@ -862,6 +866,24 @@ class PlayerWindow(QDialog):
             picks = [n for n in (1, 2) if n != current and (not self.total or n <= self.total)]
         return picks[:2]
 
+    def _stop_intro_detection(self) -> None:
+        """End any detection in flight and let its detector go.
+
+        The token already makes a late result harmless, but it does not stop the work:
+        the fetch blocks on a pool thread that the global pool is waited on at exit, so
+        without this the process outlives its last window. Nor does the token free
+        anything -- the decoded audio stays alive as long as the detector does, and the
+        detector as long as this window.
+        """
+        detector, self._intro_det = self._intro_det, None
+        if detector is None:
+            return
+        try:
+            detector.stop()
+            detector.deleteLater()
+        except RuntimeError:  # already gone with the C++ side
+            pass
+
     def _start_intro_detection(self) -> None:
         """Locate the opening precisely by fingerprinting against another episode."""
         if not self.slug or not self._media_url:
@@ -870,6 +892,11 @@ class PlayerWindow(QDialog):
             current = int(str(self.episode.number))
         except (TypeError, ValueError):
             return
+        # The previous detector is a child of this window and would otherwise live as
+        # long as it does, holding its decoded audio -- about 27 MB per episode, twice
+        # over on the first episode of a series. Auto-advance walks through a series in
+        # one window, so they accumulate.
+        self._stop_intro_detection()
         detector = IntroDetector(
             self.client, self.slug, current, self._media_url,
             self._ref_candidates(current), self,
@@ -1167,6 +1194,7 @@ class PlayerWindow(QDialog):
         self._save_timer.stop()
         self._emit_progress()  # final persist (may auto-mark finished near the end)
         self._token = object()  # ignore any in-flight resolve result
+        self._stop_intro_detection()  # a fetch in flight would outlive this window
         self._watchdog.stop()
         self._resume_timer.stop()
         # Stop listening before teardown so the player's own signals don't fire into a

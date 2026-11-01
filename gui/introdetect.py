@@ -193,25 +193,34 @@ class _AudioFetchWorker(QRunnable):
     the decoding that follows is exactly what it was before.
     """
 
-    def __init__(self, url: str, seconds: int) -> None:
+    def __init__(self, url: str, seconds: int, should_cancel) -> None:
         super().__init__()
         self.url = url
         self.seconds = seconds
+        self.should_cancel = should_cancel
         self.signals = _AudioFetchSignals()
 
     @staticmethod
     def _sweep_leftovers() -> None:
-        """Delete temporary audio left behind by earlier runs.
+        """Delete temporary audio left behind by this run and by earlier ones.
 
-        A file the decoder still had open when the delete was attempted survives it.
-        Without this sweep they would pile up at several megabytes each.
+        Two things leave files behind: a handle the decoder had not released when the
+        delete was attempted, and the app closing between writing the file and decoding
+        it, which leaves nothing to trigger the cleanup. They are several megabytes
+        each, so they cannot simply be left.
+
+        Anything written by another process is gone for good and goes immediately; our
+        own are only swept after an hour, because one of them may be in use right now.
         """
+        mine = f"animesaturn-intro-{os.getpid()}-"
         cutoff = time.time() - 3600
         try:
             stale = Path(tempfile.gettempdir()).glob("animesaturn-intro-*.aac")
             for leftover in stale:
                 try:
-                    if leftover.stat().st_mtime < cutoff:
+                    if not leftover.name.startswith(mine):
+                        leftover.unlink()
+                    elif leftover.stat().st_mtime < cutoff:
                         leftover.unlink()
                 except OSError:
                     pass
@@ -222,8 +231,12 @@ class _AudioFetchWorker(QRunnable):
         path = ""
         self._sweep_leftovers()
         try:
-            report = fetch_episode_audio(self.url, self.seconds)
-            handle, path = tempfile.mkstemp(prefix="animesaturn-intro-", suffix=".aac")
+            report = fetch_episode_audio(
+                self.url, self.seconds, should_cancel=self.should_cancel
+            )
+            handle, path = tempfile.mkstemp(
+                prefix=f"animesaturn-intro-{os.getpid()}-", suffix=".aac"
+            )
             with os.fdopen(handle, "wb") as out:
                 out.write(report.adts)
             _log.info(
@@ -266,6 +279,12 @@ class IntroDetector(QObject):
         # episode is decoded and matched before any reference is fetched.
         self._pending_cb = None
         self._pending_url = ""
+        # Set by stop(). The fetch runs on a pool thread and blocks for tens of
+        # seconds, so closing the window has to be able to end it: a QRunnable the
+        # global pool is still waiting on keeps the whole process alive after the last
+        # window is gone.
+        self._cancelled = False
+        self._tmp: Path | None = None
         base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         root = Path(base) if base else Path.home() / ".animesaturn_downloader"
         self._dir = root / "intro_cache"
@@ -374,6 +393,10 @@ class IntroDetector(QObject):
                 pass
         self._save(data)
         self.detected.emit(int(start), int(end))
+        # The work is delivered; what fed it is about 27 MB of PCM per episode and a
+        # fingerprint, and the detector itself may outlive this call.
+        self._samples_cur = None
+        self._fp_ref = None
 
     # ------------------------------------------------------------------ #
     def _decode(self, url, callback) -> None:
@@ -388,19 +411,54 @@ class IntroDetector(QObject):
         that ignores byte ranges -- the old route is taken instead, so detection costs
         what it always cost rather than stopping.
         """
+        if self._cancelled:
+            return
         self._pending_cb = callback
         self._pending_url = url
-        worker = _AudioFetchWorker(url, DECODE_SEC)
+        worker = _AudioFetchWorker(url, DECODE_SEC, lambda: self._cancelled)
         # Bound methods, not lambdas, so the slots run queued on THIS (main) thread:
         # QAudioDecoder must be created and used on the thread with the event loop.
         worker.signals.done.connect(self._on_audio_ready)
         worker.signals.error.connect(self._on_audio_failed)
         QThreadPool.globalInstance().start(worker)
 
+    def stop(self) -> None:
+        """Give up: no more fetching, no more decoding, nothing left behind.
+
+        The window that owns a detector can be closed while a fetch is in flight. The
+        fetch blocks on a pool thread, and the global pool is waited on at exit, so
+        without this the process outlives its last window -- up to a request timeout
+        for each of the thirty-odd requests an episode takes.
+        """
+        self._cancelled = True
+        decoder = self._decoder
+        self._decoder = None
+        if decoder is not None:
+            try:
+                decoder.stop()
+            except RuntimeError:
+                pass
+        self._samples_cur = None
+        self._drop_tmp()
+
+    def _drop_tmp(self) -> None:
+        tmp, self._tmp = self._tmp, None
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def _on_audio_ready(self, path: str) -> None:
+        self._tmp = Path(path)
+        if self._cancelled:
+            self._drop_tmp()
+            return
         self._run_decoder(QUrl.fromLocalFile(path), self._pending_cb, Path(path))
 
     def _on_audio_failed(self, message: str) -> None:
+        if self._cancelled:
+            return
         _log.info("intro audio fetch failed, streaming instead: %s", message)
         self._run_decoder(QUrl(self._pending_url), self._pending_cb, None)
 
@@ -435,7 +493,18 @@ class IntroDetector(QObject):
                     cleanup.unlink(missing_ok=True)
                 except OSError:
                     pass
-            callback(np.concatenate(chunks) if chunks else np.zeros(0, np.float32))
+            self._tmp = None
+            samples = np.concatenate(chunks) if chunks else np.zeros(0, np.float32)
+            # Everything below is let go BEFORE the callback runs, because the callback
+            # is what starts the next decode. `chunks` holds the raw PCM a second time,
+            # about 27 MB for seven minutes, and the decoder is a child of this object:
+            # without deleteLater it outlives the decode, and its connections keep
+            # these closures -- and the PCM with them -- alive until the process ends.
+            chunks.clear()
+            if self._decoder is decoder:
+                self._decoder = None
+            decoder.deleteLater()
+            callback(samples)
 
         def on_buffer():
             while decoder.bufferAvailable():

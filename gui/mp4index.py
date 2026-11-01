@@ -178,7 +178,15 @@ def _fetch_moov(fetch: RangeFetcher, file_length: int) -> bytes:
             msg = f"invalid box length ({size}) at {pos}"
             raise Mp4IndexError(msg)
         if name == "moov":
-            return fetch(pos, pos + size - 1)
+            body = fetch(pos, pos + size - 1)
+            # A short answer here is not a server misbehaving: a file truncated on the
+            # origin makes a conforming server clamp the range to what exists and
+            # answer 206 with fewer bytes. Parsing that as if it were whole walks off
+            # the end of the buffer in a dozen different places.
+            if len(body) < size:
+                msg = f"index (moov) truncated: {len(body)} of {size} bytes"
+                raise Mp4IndexError(msg)
+            return body
         pos += size
     msg = "index (moov) not found"
     raise Mp4IndexError(msg)
@@ -226,11 +234,25 @@ def read_audio_index(
 
     ``file_length`` comes from the ``Content-Range`` of any partial request; no ``HEAD``,
     because this CDN refuses it.
+
+    Everything that goes wrong here leaves as ``Mp4IndexError``, including a malformed
+    index. Reading past the end of a short buffer raises ``struct.error`` or
+    ``IndexError`` instead, from any of a dozen places, and a caller cannot be expected
+    to name them all to know that it should fall back.
     """
     if file_length <= 0:
         msg = "unknown file length"
         raise Mp4IndexError(msg)
     moov = _fetch_moov(fetch, file_length)
+    try:
+        return _parse_index(moov, max_seconds)
+    except (struct.error, IndexError) as exc:
+        msg = f"malformed index: {exc}"
+        raise Mp4IndexError(msg) from exc
+
+
+def _parse_index(moov: bytes, max_seconds: int) -> AudioTrack:
+    """Pull the audio track out of a ``moov`` atom already in hand."""
     moov_head = 16 if _u32(moov, 0) == 1 else 8
 
     for t_start, t_end in _traks(moov, moov_head, len(moov)):
@@ -781,6 +803,7 @@ def fetch_episode_audio(
     seconds: int = MAX_SECONDS,
     *,
     client: httpx.Client | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> FetchReport:
     """Fetch only the audio of the episode at ``url`` as a self-contained ADTS stream.
 
@@ -807,6 +830,11 @@ def fetch_episode_audio(
         before anything could object. It is not a remote case: Apache ignores Range
         past 200 of them by default, and 400 are asked for here.
         """
+        # Checked between requests rather than mid-transfer: a fetch then dies within
+        # one request instead of running all thirty-one to the end.
+        if should_cancel is not None and should_cancel():
+            msg = "cancelled"
+            raise Mp4IndexError(msg)
         request = http.build_request(
             "GET", url, headers={**_HEADERS, "Range": f"bytes={spec}"}
         )
