@@ -798,31 +798,46 @@ def fetch_episode_audio(
     counters = {"requests": 0, "bytes": 0}
     started = time.monotonic()
 
-    def fetch(first: int, last: int) -> bytes:
-        counters["requests"] += 1
-        response = http.get(url, headers={**_HEADERS, "Range": f"bytes={first}-{last}"})
-        response.raise_for_status()
-        counters["bytes"] += len(response.content)
-        return response.content
+    def ranged(spec: str) -> RangeResponse:
+        """One ranged GET, refusing anything that is not a 206 before reading it.
 
-    def fetch_many(ranges: list[tuple[int, int]]) -> RangeResponse:
-        spec = ",".join(f"{a}-{b}" for a, b in ranges)
-        response = http.get(url, headers={**_HEADERS, "Range": f"bytes={spec}"})
+        The status has to be checked before the body is touched. ``httpx.get`` reads
+        the whole body as part of the call, so a 200 -- the Range header ignored, the
+        entire file on its way -- would be buffered in full, hundreds of megabytes,
+        before anything could object. It is not a remote case: Apache ignores Range
+        past 200 of them by default, and 400 are asked for here.
+        """
+        request = http.build_request(
+            "GET", url, headers={**_HEADERS, "Range": f"bytes={spec}"}
+        )
+        response = http.send(request, stream=True, follow_redirects=True)
+        try:
+            if response.status_code != 206:
+                msg = (f"the server answered {response.status_code} instead of 206: "
+                       "it is not honouring byte ranges")
+                raise Mp4IndexError(msg)
+            body = response.read()
+        finally:
+            response.close()
         counters["requests"] += 1
-        counters["bytes"] += len(response.content)
+        counters["bytes"] += len(body)
         return RangeResponse(
             status=response.status_code,
-            body=response.content,
+            body=body,
             content_type=response.headers.get("content-type"),
             content_range=response.headers.get("content-range"),
         )
 
+    def fetch(first: int, last: int) -> bytes:
+        return ranged(f"{first}-{last}").body
+
+    def fetch_many(ranges: list[tuple[int, int]]) -> RangeResponse:
+        return ranged(",".join(f"{a}-{b}" for a, b in ranges))
+
     try:
         # The total length comes from a 16-byte request: this CDN refuses HEAD.
-        probe = http.get(url, headers={**_HEADERS, "Range": "bytes=0-15"})
-        counters["requests"] += 1
-        counters["bytes"] += len(probe.content)
-        length = total_of_content_range(probe.headers.get("content-range"))
+        probe = ranged("0-15")
+        length = total_of_content_range(probe.content_range)
         if not length:
             msg = "the server does not declare the resource length"
             raise Mp4IndexError(msg)
