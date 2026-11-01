@@ -123,6 +123,24 @@ def find_common(fp_cur: np.ndarray, fp_ref: np.ndarray, thresh: float = THRESH):
     return best_len, best_start
 
 
+def reference_is_usable(entry: dict, cur_ep: str) -> bool:
+    """Whether the series' cached reference fingerprint may be used for ``cur_ep``.
+
+    The stored fingerprint belongs to one specific episode, named by ``ref_ep``. It
+    must never be matched against that episode: comparing an episode with itself makes
+    every frame match, so the "opening" spans the whole analysed window and the button
+    appears at 0:00 and skips seven minutes in. This is not hypothetical — it had
+    happened in nine of fifteen cached series, always on the episode that had served as
+    the reference for the first one.
+
+    A reference whose provenance is unknown is refused too: without ``ref_ep`` there is
+    no way to tell it apart from the episode it would be matched against, and
+    recomputing one is cheap next to skipping into the middle of an episode.
+    """
+    ref = str(entry.get("ref_ep", "") or "")
+    return bool(ref) and ref != str(cur_ep)
+
+
 class _MatchSignals(QObject):
     done = Signal(object)  # (start_ms, end_ms, fp_ref | None)
 
@@ -177,10 +195,13 @@ class IntroDetector(QObject):
         base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         root = Path(base) if base else Path.home() / ".animesaturn_downloader"
         self._dir = root / "intro_cache"
-        # "-v2": the fingerprint switched to temporal deltas; results/refs computed with
-        # the old spectral-shape fingerprint must not be reused.
-        self._results = self._dir / "results-v2.json"
-        self._reffp = self._dir / f"{sanitize_name(str(slug))}.v2.npy"
+        # "-v3": v2 overwrote ``ref_ep`` on every finish with a guess rather than the
+        # episode the stored fingerprint actually came from, so a v2 reference cannot
+        # be told apart from the episode it would be matched against. "-v2" itself
+        # marked the switch to temporal deltas. Either way old results must not be
+        # reused; they are recomputed the next time each episode is opened.
+        self._results = self._dir / "results-v3.json"
+        self._reffp = self._dir / f"{sanitize_name(str(slug))}.v3.npy"
 
     # ------------------------------------------------------------------ #
     def _load(self) -> dict:
@@ -208,9 +229,7 @@ class IntroDetector(QObject):
         if cached:  # already detected this episode
             self.detected.emit(int(cached[0]), int(cached[1]))
             return
-        # A cached reference is only ever written when it actually produced an opening,
-        # so it can be reused for the series regardless of which episode it came from.
-        if self._reffp.exists():
+        if self._reffp.exists() and reference_is_usable(entry, self.cur_ep):
             try:
                 self._fp_ref = np.load(self._reffp)
             except (OSError, ValueError):
@@ -264,18 +283,22 @@ class IntroDetector(QObject):
 
     def _finish(self, start: int, end: int, fp_ref) -> None:
         data = self._load()
-        entry = data.setdefault(self.slug, {"ref_ep": self.ref_ep, "eps": {}})
-        entry["ref_ep"] = self.ref_ep
+        entry = data.setdefault(self.slug, {"ref_ep": "", "eps": {}})
         entry.setdefault("eps", {})[self.cur_ep] = [int(start), int(end)]
-        self._save(data)
         # Only cache a reference that actually produced an opening. Caching one that
         # matched nothing would pin the whole series to a useless reference for good.
+        # ``ref_ep`` is written here and nowhere else, because it has one job: to name
+        # the episode the stored fingerprint came from. Overwriting it on every later
+        # episode (as it used to) left it naming an episode with no relation to the
+        # stored file, which is exactly how a reference ends up matched against itself.
         if end > 0 and fp_ref is not None and not self._reffp.exists():
             try:
                 self._dir.mkdir(parents=True, exist_ok=True)
                 np.save(self._reffp, fp_ref)
+                entry["ref_ep"] = self.ref_ep
             except (OSError, ValueError):
                 pass
+        self._save(data)
         self.detected.emit(int(start), int(end))
 
     # ------------------------------------------------------------------ #
