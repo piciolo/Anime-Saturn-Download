@@ -11,6 +11,7 @@ from pathlib import Path
 from PySide6.QtCore import QSettings
 
 from .net import DEFAULT_BASE_URL
+from .sources.animeunity_client import DEFAULT_BASE_URL as ANIMEUNITY_DEFAULT
 
 _ORG = "AnimeSaturnDownloader"
 _APP = "GUI"
@@ -53,3 +54,17 @@ class AppSettings:
     @base_url.setter
     def base_url(self, value: str) -> None:
         self._settings.setValue("base_url", value)
+
+    @property
+    def animeunity_base_url(self) -> str:
+        """AnimeUnity's domain, found in the published list or typed by hand.
+
+        Kept so the domain hunt does not have to run on every start: the app
+        begins with the last address that worked and corrects it in the
+        background.
+        """
+        return str(self._settings.value("animeunity_base_url", ANIMEUNITY_DEFAULT))
+
+    @animeunity_base_url.setter
+    def animeunity_base_url(self, value: str) -> None:
+        self._settings.setValue("animeunity_base_url", value)

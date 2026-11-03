@@ -24,7 +24,12 @@ _STALE_TOKEN_CODES = {403, 419}
 # Recognises a resolution token such as "1080p" or "720p".
 _QUALITY_PATTERN = re.compile(r"^\d{3,4}p$", re.IGNORECASE)
 
-DEFAULT_BASE_URL = "https://www.animeunity.so"
+# Fallback domain, used until the published list says otherwise. It was ".so",
+# which as of 2 November 2026 no longer resolves even as a name: the portal was
+# simply unreachable, and nothing could be done about it from here — there were
+# no candidates and no setting to correct it. See ``gui/portal_domains.py``,
+# which makes the list editable without shipping a new build.
+DEFAULT_BASE_URL = "https://www.animeunity.co"
 
 # Regex used to pull the direct download link out of the video page scripts.
 DOWNLOAD_LINK_PATTERN = re.compile(r"window\.downloadUrl\s*=\s*'(https?://[^\s']+)'")
@@ -57,6 +62,30 @@ def sanitize_name(name: str) -> str:
     """Replace characters that are invalid in Windows file/dir names."""
     cleaned = re.sub(r'[\\/:*?"<>|]', "_", name).strip().strip(".")
     return cleaned or "AnimeUnity"
+
+
+def ping_domain(base_url: str) -> bool:
+    """True if ``base_url`` answers and is genuinely AnimeUnity.
+
+    A 200 is not enough: a lapsed domain bought by someone else, or a parking
+    page, would answer happily. What is looked for is the CSRF tag in the
+    archive page — precisely the thing this client cannot work without. If it
+    is there the site is the right one and will serve us; if it is missing, the
+    domain would be useless anyway.
+    """
+    try:
+        with httpx.Client(
+            timeout=8.0, follow_redirects=True, verify=False  # noqa: S501
+        ) as client:
+            response = client.get(
+                f"{base_url.rstrip('/')}/archivio",
+                headers={"User-Agent": _FIREFOX_UA},
+            )
+            if response.status_code >= 400:
+                return False
+            return CSRF_META_PATTERN.search(response.text) is not None
+    except (httpx.HTTPError, OSError, ValueError):
+        return False
 
 
 class DownloadCancelled(Exception):

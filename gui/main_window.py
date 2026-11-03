@@ -56,6 +56,7 @@ from .theme import APP_QSS, GOOD, WARN
 from .player import PlayerWindow
 from .widgets import AnimeCard, DownloadRow, MultiSelectDropdown, human_size
 from .workers import (
+    AnimeUnityDomainWorker,
     DownloadTask,
     EpisodesWorker,
     GenresWorker,
@@ -132,9 +133,13 @@ class MainWindow(QMainWindow):
         self._suggest_map: dict[str, dict] = {}
         self._detail_total = 0
         self._poster_workers: set = set()
-        # I portali da cui cercare. Oggi ce n'e' uno solo, quindi il comportamento non
-        # cambia; il resto dell'app pero' non presuppone piu' quale sia.
-        self.sources = SourceRegistry(self.client)
+        # I portali da cui cercare. Il dominio di AnimeUnity arriva dalle
+        # impostazioni, dove lo lascia l'elenco pubblicato o l'utente: averlo
+        # fisso nel codice e' cio' che lo aveva reso irraggiungibile.
+        self.sources = SourceRegistry(
+            self.client,
+            animeunity_base_url=self.settings.animeunity_base_url,
+        )
         self.history = WatchHistory()
         self.favorites = FavoritesStore()
         self.cloud = CloudClient(CloudConfig())
@@ -149,6 +154,25 @@ class MainWindow(QMainWindow):
         self._build_ui()
         # Land on the currently-airing anime instead of a blank grid.
         self._browse("ongoing")
+        self._heal_animeunity_domain()
+
+    def _heal_animeunity_domain(self) -> None:
+        """Check in the background that AnimeUnity's domain is still the right one.
+
+        The portal moves and there is no field in this app to correct it by
+        hand, so without this it stays broken until a new build ships — which
+        is exactly what happened: the address in the code stopped resolving and
+        the portal was simply gone.
+        """
+        worker = AnimeUnityDomainWorker(self.settings.animeunity_base_url)
+        worker.signals.resolved.connect(self._on_animeunity_domain)
+        self.io_pool.start(worker)
+
+    def _on_animeunity_domain(self, base_url: str) -> None:
+        self.settings.animeunity_base_url = base_url
+        # Rebuilt in place, so the next search already uses the new address
+        # without restarting.
+        self.sources.set_animeunity_base_url(base_url)
 
     # ------------------------------------------------------------------ #
     # UI construction

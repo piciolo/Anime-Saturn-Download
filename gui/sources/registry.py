@@ -26,12 +26,28 @@ from .base import AnimeSource
 class SourceRegistry:
     """The portals in use, in priority order."""
 
-    def __init__(self, client: AnimeSaturnClient | None = None) -> None:
+    def __init__(
+        self,
+        client: AnimeSaturnClient | None = None,
+        animeunity_base_url: str | None = None,
+    ) -> None:
         # In ordine di preferenza: il primo che ha l'episodio viene usato per riprodurlo.
         self._sources: list[AnimeSource] = [
             AnimeSaturnSource(client),
-            AnimeUnitySource(),
+            AnimeUnitySource(base_url=animeunity_base_url),
         ]
+
+    def set_animeunity_base_url(self, base_url: str) -> None:
+        """Point AnimeUnity at another domain without restarting the app.
+
+        The portal moves; when the published list or the user says it has, the
+        source is rebuilt in place so the next search already uses the new
+        address.
+        """
+        for index, source in enumerate(self._sources):
+            if source.id == AnimeUnitySource.id:
+                self._sources[index] = AnimeUnitySource(base_url=base_url)
+                return
 
     # ------------------------------------------------------------------ #
     @property

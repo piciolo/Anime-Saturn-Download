@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 
 from .models import Anime, Episode
 from .net import AnimeSaturnClient, DownloadCancelled, build_filename
+from .portal_domains import resolve_animeunity_domain
 
 
 class SearchSignals(QObject):
@@ -62,6 +63,33 @@ class SearchWorker(QRunnable):
             self.signals.results.emit(self.token, animes)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
             self.signals.error.emit(self.token, str(exc))
+
+
+class AnimeUnityDomainSignals(QObject):
+    resolved = Signal(str)  # a domain that answers and really is AnimeUnity
+
+
+class AnimeUnityDomainWorker(QRunnable):
+    """Find a working AnimeUnity domain, off the UI thread.
+
+    Run at start-up and after the portal has failed. It stays quiet unless it
+    has something better to offer: when no candidate answers there is no way to
+    tell a moved portal from a missing network, and replacing a good address
+    with a guess would make things worse.
+    """
+
+    def __init__(self, current: str) -> None:
+        super().__init__()
+        self.current = current
+        self.signals = AnimeUnityDomainSignals()
+
+    def run(self) -> None:
+        try:
+            found = resolve_animeunity_domain(self.current)
+        except Exception:  # noqa: BLE001 - best effort, never fatal
+            return
+        if found and found != self.current:
+            self.signals.resolved.emit(found)
 
 
 class GenresSignals(QObject):

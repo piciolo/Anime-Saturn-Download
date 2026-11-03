@@ -15,7 +15,7 @@ Two mappings are worth knowing:
 
 from __future__ import annotations
 
-from .animeunity_client import AnimeUnityClient
+from .animeunity_client import DEFAULT_BASE_URL, AnimeUnityClient
 from .base import AnimeSource
 
 
@@ -100,8 +100,14 @@ class AnimeUnitySource(AnimeSource):
     id = "animeunity"
     label = "AnimeUnity"
 
-    def __init__(self, client: AnimeUnityClient | None = None) -> None:
-        self.client = client or AnimeUnityClient()
+    def __init__(
+        self,
+        client: AnimeUnityClient | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        # ``base_url`` comes from the published domain list: the portal moves,
+        # and having it fixed in the client is what made it unreachable.
+        self.client = client or AnimeUnityClient(base_url or DEFAULT_BASE_URL)
 
     # ------------------------------------------------------------------ #
     def search(
