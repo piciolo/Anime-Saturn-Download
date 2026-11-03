@@ -68,3 +68,25 @@ class AppSettings:
     @animeunity_base_url.setter
     def animeunity_base_url(self, value: str) -> None:
         self._settings.setValue("animeunity_base_url", value)
+
+    @property
+    def default_portal(self) -> str:
+        """Il portale scelto come predefinito, o ``""`` per chiedere a ogni avvio.
+
+        E' l'unico valore salvato della scelta: finche' resta vuoto la domanda compare
+        all'apertura, e appena l'utente spunta «ricorda» smette di comparire. Toglierlo
+        la fa tornare.
+
+        Gemello di ``defaultPortal()`` dell'app Android, dove lo stesso stato e' un
+        ``null``: qui la stringa vuota fa quel lavoro, e la chiave viene **rimossa**
+        invece di essere svuotata, cosi' le due app non si distinguono nemmeno nel file
+        delle preferenze.
+        """
+        return str(self._settings.value("default_portal", "") or "")
+
+    @default_portal.setter
+    def default_portal(self, value: str) -> None:
+        if value:
+            self._settings.setValue("default_portal", value)
+        else:
+            self._settings.remove("default_portal")

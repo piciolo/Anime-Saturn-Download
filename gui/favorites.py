@@ -23,6 +23,7 @@ from PySide6.QtCore import QStandardPaths
 from .canonical import canonical_key
 from .merge import merge_favourite
 from .net import sanitize_name
+from .portal_filter import entries_for_portal, entries_outside_portal, entry_portal
 
 
 class FavoritesStore:
@@ -148,20 +149,43 @@ class FavoritesStore:
         self._data = data
         self._save()
 
-    def all(self) -> list[dict]:
-        """Favourite entries, most recently added first (tombstones excluded)."""
-        entries = [e for e in self._data.values() if e.get("is_favourite")]
+    def all(self, portal: str | None = None) -> list[dict]:
+        """Favourite entries, most recently added first (tombstones excluded).
+
+        Con ``portal``, i preferiti di quel portale. Le lapidi restano fuori: non sono
+        preferiti nascosti, sono preferiti rimossi.
+        """
+        entries = entries_for_portal(self._live(), portal)
         entries.sort(key=lambda e: e.get("toggled_at", 0), reverse=True)
         return entries
 
-    def count(self) -> int:
-        return sum(1 for e in self._data.values() if e.get("is_favourite"))
+    def outside_portal(self, portal: str | None) -> int:
+        """Quanti preferiti non comparirebbero nell'elenco del portale ``portal``."""
+        return entries_outside_portal(self._live(), portal)
 
-    def clear(self) -> None:
-        """Un-favourite everything (keeping tombstones so removals still propagate)."""
+    def _live(self) -> list[dict]:
+        """I preferiti veri, lapidi escluse."""
+        return [e for e in self._data.values() if e.get("is_favourite")]
+
+    def count(self) -> int:
+        return len(self._live())
+
+    def clear(self, portal: str | None = None) -> None:
+        """Un-favourite everything (keeping tombstones so removals still propagate).
+
+        Delimitata al portale in elenco per la stessa ragione della cronologia: togliere
+        anche cio' che non e' in elenco sarebbe agire su dati che l'utente non sta
+        vedendo.
+        """
         now = time.time()
+        changed = False
         for entry in self._data.values():
-            if entry.get("is_favourite"):
-                entry["is_favourite"] = False
-                entry["toggled_at"] = now
-        self._save()
+            if not entry.get("is_favourite"):
+                continue
+            if portal is not None and entry_portal(entry) != portal:
+                continue
+            entry["is_favourite"] = False
+            entry["toggled_at"] = now
+            changed = True
+        if changed:
+            self._save()

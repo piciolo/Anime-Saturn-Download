@@ -162,6 +162,8 @@ def main() -> int:
     qInstallMessageHandler(_qt_message_handler)
 
     from gui.main_window import create_window
+    from gui.portal_picker import choose_portal, should_ask, stored_portal
+    from gui.settings import AppSettings
     from gui.theme import APP_QSS, build_palette
 
     app = QApplication(sys.argv)
@@ -178,7 +180,15 @@ def main() -> int:
     if logo.exists():
         app.setWindowIcon(QIcon(str(logo)))
 
-    window = create_window()
+    # La domanda sul portale va prima della finestra: il catalogo parte dentro
+    # ``MainWindow.__init__``, quindi la scelta deve esistere già allora. Chiederla dopo
+    # vorrebbe dire mostrare un elenco e cambiarlo sotto gli occhi un istante più tardi.
+    # La finestra non c'è ancora, ma la tavolozza e il foglio di stile sono già
+    # applicati all'applicazione, quindi la domanda ha l'aspetto del resto.
+    settings = AppSettings()
+    portal = choose_portal(settings) if should_ask(settings) else stored_portal(settings)
+
+    window = create_window(portal=portal)
     window.show()
     _install_freeze_watchdog()
     return app.exec()

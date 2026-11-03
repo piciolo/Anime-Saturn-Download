@@ -1,0 +1,245 @@
+{
+  "_comment": [
+    "CONTRATTO DEL FILTRO PER PORTALE condiviso fra l'app Windows (Python) e",
+    "l'app Android (Flutter).",
+    "",
+    "Preferiti e «continua a guardare» stanno in un archivio solo. Scegliendo un",
+    "portale, l'elenco ne mostra una parte: questo file dice quale. Le due app",
+    "eseguono gli stessi casi nei propri test, cosi' mostrano le stesse liste a",
+    "partire dallo stesso archivio, invece di divergere in silenzio.",
+    "",
+    "Il caso che conta piu' di tutti e' la voce senza 'source_id': viene da quando",
+    "l'app aveva un portale solo, quindi vale AnimeSaturn. Se una delle due app",
+    "sbagliasse quel ripiego, la cronologia piu' lunga -- quella di chi usa l'app",
+    "da prima -- diventerebbe invisibile sotto ENTRAMBI i portali, e si leggerebbe",
+    "come cancellata.",
+    "",
+    "COPIA IDENTICA in flutter_app/assets/portal_filter_vectors.json e in",
+    "Windows APP/gui/portal_filter_vectors.json: i due file devono restare byte per",
+    "byte uguali. Chi ne cambia uno cambia anche l'altro, altrimenti il contratto",
+    "non c'e' piu'.",
+    "",
+    "'portal' a null e' lo stato di chi non ha ancora scelto, e quello della TV che",
+    "non ha la schermata di scelta: la' l'elenco resta completo."
+  ],
+  "version": 1,
+  "entry": [
+    {
+      "name": "voce di AnimeSaturn, portale AnimeSaturn",
+      "entry": {
+        "source_id": "animesaturn"
+      },
+      "portal": "animesaturn",
+      "expect": true
+    },
+    {
+      "name": "voce di AnimeUnity, portale AnimeSaturn",
+      "entry": {
+        "source_id": "animeunity"
+      },
+      "portal": "animesaturn",
+      "expect": false
+    },
+    {
+      "name": "voce di AnimeUnity, portale AnimeUnity",
+      "entry": {
+        "source_id": "animeunity"
+      },
+      "portal": "animeunity",
+      "expect": true
+    },
+    {
+      "name": "voce di AnimeSaturn, portale AnimeUnity",
+      "entry": {
+        "source_id": "animesaturn"
+      },
+      "portal": "animeunity",
+      "expect": false
+    },
+    {
+      "name": "voce vecchia senza campo: vale AnimeSaturn",
+      "entry": {},
+      "portal": "animesaturn",
+      "expect": true
+    },
+    {
+      "name": "voce vecchia senza campo: non e' di AnimeUnity",
+      "entry": {},
+      "portal": "animeunity",
+      "expect": false
+    },
+    {
+      "name": "campo vuoto come campo assente",
+      "entry": {
+        "source_id": ""
+      },
+      "portal": "animesaturn",
+      "expect": true
+    },
+    {
+      "name": "campo di soli spazi come campo assente",
+      "entry": {
+        "source_id": "   "
+      },
+      "portal": "animesaturn",
+      "expect": true
+    },
+    {
+      "name": "campo nullo come campo assente",
+      "entry": {
+        "source_id": null
+      },
+      "portal": "animesaturn",
+      "expect": true
+    },
+    {
+      "name": "un numero non e' un campo vuoto: diventa il testo '0'",
+      "entry": {
+        "source_id": 0
+      },
+      "portal": "animesaturn",
+      "expect": false
+    },
+    {
+      "name": "nessuna scelta: la voce vecchia resta",
+      "entry": {},
+      "portal": null,
+      "expect": true
+    },
+    {
+      "name": "nessuna scelta: AnimeSaturn resta",
+      "entry": {
+        "source_id": "animesaturn"
+      },
+      "portal": null,
+      "expect": true
+    },
+    {
+      "name": "nessuna scelta: AnimeUnity resta",
+      "entry": {
+        "source_id": "animeunity"
+      },
+      "portal": null,
+      "expect": true
+    },
+    {
+      "name": "un portale ignoto non finisce in AnimeSaturn",
+      "entry": {
+        "source_id": "altrosito"
+      },
+      "portal": "animesaturn",
+      "expect": false
+    },
+    {
+      "name": "un portale ignoto resta sul suo",
+      "entry": {
+        "source_id": "altrosito"
+      },
+      "portal": "altrosito",
+      "expect": true
+    }
+  ],
+  "set": [
+    {
+      "name": "archivio misto visto da AnimeSaturn",
+      "entries": [
+        {
+          "title": "a",
+          "source_id": "animesaturn"
+        },
+        {
+          "title": "b",
+          "source_id": "animeunity"
+        },
+        {
+          "title": "c"
+        },
+        {
+          "title": "d",
+          "source_id": "animeunity"
+        }
+      ],
+      "portal": "animesaturn",
+      "expect": {
+        "shown": 2,
+        "outside": 2
+      }
+    },
+    {
+      "name": "lo stesso archivio visto da AnimeUnity",
+      "entries": [
+        {
+          "title": "a",
+          "source_id": "animesaturn"
+        },
+        {
+          "title": "b",
+          "source_id": "animeunity"
+        },
+        {
+          "title": "c"
+        },
+        {
+          "title": "d",
+          "source_id": "animeunity"
+        }
+      ],
+      "portal": "animeunity",
+      "expect": {
+        "shown": 2,
+        "outside": 2
+      }
+    },
+    {
+      "name": "lo stesso archivio senza nessuna scelta",
+      "entries": [
+        {
+          "title": "a",
+          "source_id": "animesaturn"
+        },
+        {
+          "title": "b",
+          "source_id": "animeunity"
+        },
+        {
+          "title": "c"
+        },
+        {
+          "title": "d",
+          "source_id": "animeunity"
+        }
+      ],
+      "portal": null,
+      "expect": {
+        "shown": 4,
+        "outside": 0
+      }
+    },
+    {
+      "name": "archivio di un solo portale: niente resta fuori",
+      "entries": [
+        {
+          "title": "a",
+          "source_id": "animesaturn"
+        },
+        {
+          "title": "b"
+        }
+      ],
+      "portal": "animesaturn",
+      "expect": {
+        "shown": 2,
+        "outside": 0
+      }
+    },
+    {
+      "name": "archivio vuoto",
+      "entries": [],
+      "portal": "animeunity",
+      "expect": {
+        "shown": 0,
+        "outside": 0
+      }
+    }
+  ]
+}

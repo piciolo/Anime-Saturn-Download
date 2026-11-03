@@ -29,6 +29,7 @@ from .merge import (
     prune_removed,
 )
 from .net import sanitize_name
+from .portal_filter import entries_for_portal, entries_outside_portal, entry_portal
 
 # Below this fraction of the episode we treat it as "not really started"; at/above the
 # upper bound the episode counts as watched (so resume can advance to the next one).
@@ -216,16 +217,31 @@ class WatchHistory:
         entry = self._data.get(self._key(title))
         return None if entry is None or is_removed(entry) else entry
 
-    def recent(self, limit: int = 30) -> list[dict]:
+    def recent(self, limit: int = 30, portal: str | None = None) -> list[dict]:
         """Resume entries, most-recently-watched first (tombstones excluded).
 
         Le lapidi non sono voci nascoste, sono voci rimosse: restano nel file solo per
         raccontare agli altri dispositivi che sono state rimosse.
+
+        Con ``portal`` l'elenco mostra un portale alla volta. Il filtro viene **prima**
+        del taglio a ``limit``, e l'ordine conta: tagliare prima e filtrare dopo
+        renderebbe invisibile un portale poco usato appena l'altro riempie da solo le
+        prime ``limit`` posizioni.
         """
         entries = sorted(
-            self._live(), key=lambda e: e.get("updated_at", 0), reverse=True
+            entries_for_portal(self._live(), portal),
+            key=lambda e: e.get("updated_at", 0),
+            reverse=True,
         )
         return entries[:limit]
+
+    def outside_portal(self, portal: str | None) -> int:
+        """Quante voci non comparirebbero nell'elenco del portale ``portal``.
+
+        Esiste per poterlo dire all'utente: una lista che si accorcia da sola si legge
+        come dati perduti, e non lo sono.
+        """
+        return entries_outside_portal(self._live(), portal)
 
     def _live(self) -> list[dict]:
         """Le voci vere, lapidi escluse."""
@@ -268,14 +284,23 @@ class WatchHistory:
         self._data[key] = as_tombstone(entry, time.time())
         self._save()
 
-    def clear(self) -> None:
-        """Empty the history, leaving a tombstone for each entry it held."""
+    def clear(self, portal: str | None = None) -> None:
+        """Empty the history, leaving a tombstone for each entry it held.
+
+        Delimitata al portale in elenco quando ce n'e' uno, e di proposito: la vista
+        mostra un portale alla volta, e un pulsante che svuotasse anche cio' che non e'
+        in elenco cancellerebbe dati che l'utente non sta nemmeno vedendo — l'unico
+        danno davvero irreversibile di tutta questa funzione.
+        """
         now = time.time()
         changed = False
         for key, entry in list(self._data.items()):
-            if not is_removed(entry):
-                self._data[key] = as_tombstone(entry, now)
-                changed = True
+            if is_removed(entry):
+                continue
+            if portal is not None and entry_portal(entry) != portal:
+                continue
+            self._data[key] = as_tombstone(entry, now)
+            changed = True
         if changed:
             self._save()
 

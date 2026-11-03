@@ -38,6 +38,7 @@ from .favorites import FavoritesStore
 from .sources import SourceRegistry
 from .history import WatchHistory, format_progress
 from .models import Anime, Episode
+from .portal_picker import choose_portal, portal_label
 from .net import (
     DUB_OPTIONS,
     GENRE_OPTIONS,
@@ -107,9 +108,14 @@ def _clear_widgets_keep_stretch(layout) -> None:
 class MainWindow(QMainWindow):
     """Top-level window."""
 
-    def __init__(self) -> None:
+    def __init__(self, portal: str | None = None) -> None:
         super().__init__()
         self.settings = AppSettings()
+        #: Il portale in uso, o ``None`` per mostrarli tutti (vedi gui/portal_picker.py).
+        #:
+        #: Filtra la vista, non l'archivio: preferiti e cronologia restano uno, e le voci
+        #: dell'altro portale tornano in elenco appena si torna là.
+        self.portal = portal
         self.client = AnimeSaturnClient(self.settings.base_url)
 
         self.io_pool = QThreadPool.globalInstance()
@@ -139,6 +145,7 @@ class MainWindow(QMainWindow):
         self.sources = SourceRegistry(
             self.client,
             animeunity_base_url=self.settings.animeunity_base_url,
+            only_portal=self.portal,
         )
         self.history = WatchHistory()
         self.favorites = FavoritesStore()
@@ -211,6 +218,69 @@ class MainWindow(QMainWindow):
         # Pull anything watched elsewhere shortly after launch, once the window is up.
         QTimer.singleShot(2500, self._auto_sync)
 
+    def _refresh_portal_button(self) -> None:
+        self.portal_button.setText(f"🌐  {portal_label(self.portal)}")
+        self.portal_button.setToolTip(
+            "Catalogo, ricerca, preferiti e «continua» mostrano questo portale. "
+            "Le voci dell'altro restano dove sono: cambiando portale tornano."
+        )
+
+    def _change_portal(self) -> None:
+        """Riapre la domanda e applica la scelta senza riavviare.
+
+        Il registro viene ripuntato, non ricostruito: ``only_portal`` lo rilegge a ogni
+        ricerca, quindi la prossima parte già dal portale scelto, e i client restano
+        quelli di prima — con i loro cookie e con il dominio di AnimeUnity già corretto
+        a caldo, che ricostruirli butterebbe via.
+
+        Il catalogo si ricarica solo se è quello che l'utente sta guardando: strappargli
+        da sotto la scheda di un anime per rifare una griglia che non ha chiesto sarebbe
+        un dispetto, e la ricerca successiva parte comunque dal portale nuovo.
+        """
+        chosen = choose_portal(self.settings, current=self.portal, parent=self)
+        if chosen == self.portal:
+            return
+        self.portal = chosen
+        self.sources.only_portal = chosen
+        self._refresh_portal_button()
+        self._refresh_watch_views()
+        if self.tabs.currentIndex() == self._favorites_tab_index:
+            self._refresh_favorites()
+        query = getattr(self, "_query", None)
+        if (
+            query
+            and self.tabs.currentIndex() == 0
+            and self.catalog_stack.currentIndex() == 0
+        ):
+            self._start_query(
+                title=query["title"],
+                sort=query["sort"],
+                dub=query["dub"],
+                filters=query["filters"],
+            )
+
+    def _outside_note(self, label: QLabel, count: int) -> None:
+        """Dice quante voci sono sull'altro portale, o tace quando sono zero.
+
+        Un elenco che si accorcia senza spiegazioni si legge come una perdita di dati,
+        ed è la paura giusta da togliere subito: quelle voci ci sono ancora.
+        """
+        if count <= 0:
+            label.setVisible(False)
+            return
+        if count == 1:
+            testo = (
+                "Un'altra voce è su un altro portale: cambia portale in alto "
+                "per vederla."
+            )
+        else:
+            testo = (
+                f"{count} voci sono su un altro portale: cambia portale in alto "
+                "per vederle."
+            )
+        label.setText(f"↔  {testo}")
+        label.setVisible(True)
+
     def _go_back(self) -> None:
         """Return from the anime detail view to the results grid."""
         if self.tabs.currentIndex() == 0 and self.catalog_stack.currentIndex() == 1:
@@ -238,6 +308,14 @@ class MainWindow(QMainWindow):
         version.setObjectName("Muted")
         top.addWidget(version)
         top.addStretch(1)
+
+        # Nell'intestazione e non in una scheda: la scelta vale per tutte, e cercarla
+        # dentro i download sarebbe cercarla dove non riguarda niente.
+        self.portal_button = QPushButton()
+        self.portal_button.setObjectName("Ghost")
+        self.portal_button.clicked.connect(self._change_portal)
+        top.addWidget(self.portal_button)
+        self._refresh_portal_button()
 
         self.account_button = QPushButton("👤  Account")
         self.account_button.setObjectName("Ghost")
@@ -652,6 +730,12 @@ class MainWindow(QMainWindow):
         self.favorites_status.setObjectName("Muted")
         layout.addWidget(self.favorites_status)
 
+        self.favorites_outside = QLabel("")
+        self.favorites_outside.setObjectName("Muted")
+        self.favorites_outside.setWordWrap(True)
+        self.favorites_outside.setVisible(False)
+        layout.addWidget(self.favorites_outside)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         container = QWidget()
@@ -670,7 +754,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_favorites(self) -> None:
         _clear_layout(self.favorites_grid)
-        entries = self.favorites.all()
+        entries = self.favorites.all(portal=self.portal)
         for entry in entries:
             # Favourites store only what a card needs; the rest is filled on open.
             anime = Anime(
@@ -693,6 +777,9 @@ class MainWindow(QMainWindow):
             f"{len(entries)} preferiti" if entries else ""
         )
         self.favorites_empty.setVisible(not entries)
+        self._outside_note(
+            self.favorites_outside, self.favorites.outside_portal(self.portal)
+        )
 
     # ------------------------------------------------------------------ #
     # Genres tab (mirrors the site's /genres page)
@@ -810,6 +897,12 @@ class MainWindow(QMainWindow):
         bar.addWidget(clear)
         layout.addLayout(bar)
 
+        self.continue_outside = QLabel("")
+        self.continue_outside.setObjectName("Muted")
+        self.continue_outside.setWordWrap(True)
+        self.continue_outside.setVisible(False)
+        layout.addWidget(self.continue_outside)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         container = QWidget()
@@ -893,8 +986,23 @@ class MainWindow(QMainWindow):
             self._refresh_library()
 
     def _clear_history(self) -> None:
-        self.history.clear()
+        """Svuota la cronologia **del portale in elenco**, non tutta.
+
+        Lo dice anche a cose fatte, perché «Svuota cronologia» da solo promette più di
+        quel che fa: senza quella riga l'utente crede di aver cancellato tutto, e le
+        voci dell'altro portale gli ricompaiono addosso appena cambia portale.
+        """
+        fuori = self.history.outside_portal(self.portal)
+        self.history.clear(portal=self.portal)
         self._refresh_continue()
+        if self.portal is not None and fuori > 0:
+            voci = "voce" if fuori == 1 else "voci"
+            resta = "resta" if fuori == 1 else "restano"
+            self.continue_outside.setText(
+                f"↔  Svuotata per {portal_label(self.portal)}. {fuori} {voci} "
+                f"dell'altro portale {resta} dove {'era' if fuori == 1 else 'erano'}."
+            )
+            self.continue_outside.setVisible(True)
 
     def _open_download_folder(self) -> None:
         from PySide6.QtCore import QUrl
@@ -906,12 +1014,15 @@ class MainWindow(QMainWindow):
     # --- Continue watching --- #
     def _refresh_continue(self) -> None:
         _clear_widgets_keep_stretch(self.continue_layout)
-        entries = self.history.recent(40)
+        entries = self.history.recent(40, portal=self.portal)
         for entry in entries:
             self.continue_layout.insertWidget(
                 self.continue_layout.count() - 1, self._continue_row(entry)
             )
         self.continue_empty.setVisible(not entries)
+        self._outside_note(
+            self.continue_outside, self.history.outside_portal(self.portal)
+        )
 
     def _continue_row(self, entry: dict) -> QWidget:
         row = QFrame()
@@ -1272,7 +1383,7 @@ class MainWindow(QMainWindow):
         if token != self._search_token:
             return  # stale response from a superseded query
         if not self._append_next and not animes:
-            self.status_label.setText("Nessun risultato trovato.")
+            self.status_label.setText(self._no_results_text())
             self.load_more_button.setVisible(False)
             return
 
@@ -1289,6 +1400,22 @@ class MainWindow(QMainWindow):
         self.load_more_button.setVisible(has_more)
         self.load_more_button.setEnabled(True)
         self.load_more_button.setText("Carica altri risultati")
+
+    def _no_results_text(self) -> str:
+        """«Nessun risultato», dicendo su quale portale si è cercato.
+
+        Con un portale solo il silenzio diventa visibile: finora l'altro riempiva la
+        griglia, e un filtro che questo non sa esprimere non si notava. Senza dirlo,
+        l'utente legge «questo anime non c'è» invece di «qui non si può chiedere così»,
+        e va a cercare il problema nel posto sbagliato — magari nel dominio di un
+        portale che non è stato nemmeno interrogato.
+        """
+        if len(self.sources.browsing) < len(self.sources.sources):
+            return (
+                f"Nessun risultato su {portal_label(self.portal)}. L'altro portale non "
+                "è stato interrogato: cambia portale in alto per cercare anche lì."
+            )
+        return "Nessun risultato trovato."
 
     def _on_search_error(self, token: object, message: str) -> None:
         if token != self._search_token:
@@ -1719,8 +1846,8 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
 
-def create_window() -> MainWindow:
+def create_window(portal: str | None = None) -> MainWindow:
     """Create and return the main window (style applied by the caller)."""
-    window = MainWindow()
+    window = MainWindow(portal=portal)
     window.setStyleSheet(APP_QSS)
     return window

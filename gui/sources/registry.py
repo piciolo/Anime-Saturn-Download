@@ -1,7 +1,8 @@
 """The set of portals the app searches, and how their results are combined.
 
-Today it holds one source, so everything behaves exactly as before. That is the point:
-the switch to many portals should be adding an entry here, not editing the whole app.
+Con ``only_portal`` il registro cerca su un portale solo: e' la scelta che l'utente fa
+all'avvio. Riaprire una voce salvata resta libero da quella scelta, perche' un episodio
+vive dove e' stato trovato.
 
 Two rules the aggregation follows:
 
@@ -30,12 +31,22 @@ class SourceRegistry:
         self,
         client: AnimeSaturnClient | None = None,
         animeunity_base_url: str | None = None,
+        only_portal: str | None = None,
     ) -> None:
         # In ordine di preferenza: il primo che ha l'episodio viene usato per riprodurlo.
         self._sources: list[AnimeSource] = [
             AnimeSaturnSource(client),
             AnimeUnitySource(base_url=animeunity_base_url),
         ]
+        #: Il portale scelto dall'utente, o ``None`` per cercarli tutti.
+        #:
+        #: Vale per catalogo, ricerca e suggerimenti. NON vale per riaprire una voce
+        #: salvata: un preferito o una puntata in «continua a guardare» vivono sul
+        #: portale da cui vennero, e da li' devono riaprirsi, qualunque sia il portale
+        #: scelto adesso. Che l'elenco mostri un portale alla volta e' una scelta di
+        #: vista, presa altrove (``gui/portal_filter.py``); qui, aperta una voce, si va
+        #: dove sta.
+        self.only_portal = only_portal
 
     def set_animeunity_base_url(self, base_url: str) -> None:
         """Point AnimeUnity at another domain without restarting the app.
@@ -53,6 +64,30 @@ class SourceRegistry:
     @property
     def sources(self) -> list[AnimeSource]:
         return list(self._sources)
+
+    @property
+    def _browse(self) -> list[AnimeSource]:
+        """I portali su cui cercare: quello scelto, o tutti se non si e' scelto.
+
+        Se l'identificativo scelto non corrisponde a nessun portale — una preferenza
+        vecchia, un portale rimosso — si torna a cercarli tutti invece di non cercare da
+        nessuna parte: un elenco vuoto per sempre sarebbe il modo peggiore di reagire a
+        una stringa che non si riconosce.
+        """
+        if self.only_portal is None:
+            return self._sources
+        scelti = [s for s in self._sources if s.id == self.only_portal]
+        return scelti or self._sources
+
+    @property
+    def browsing(self) -> list[AnimeSource]:
+        """I portali davvero interrogati, per poterli nominare all'utente.
+
+        Serve agli avvisi: con un portale solo attivo, accusare del silenzio il portale
+        che non e' stato nemmeno provato manderebbe l'utente a cercare il dominio
+        sbagliato.
+        """
+        return list(self._browse)
 
     def add(self, source: AnimeSource) -> None:
         self._sources.append(source)
@@ -89,7 +124,7 @@ class SourceRegistry:
         A portal that raises is skipped rather than allowed to empty the whole result.
         """
         per_source: list[list[dict]] = []
-        for source in self._sources:
+        for source in self._browse:
             try:
                 per_source.append(
                     source.search(title, sort=sort, page=page, dub=dub, filters=filters)
@@ -100,7 +135,7 @@ class SourceRegistry:
 
     def suggest(self, query: str) -> list[dict]:
         per_source: list[list[dict]] = []
-        for source in self._sources:
+        for source in self._browse:
             try:
                 per_source.append(source.suggest(query))
             except Exception:  # noqa: BLE001
