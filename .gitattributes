@@ -1,0 +1,11 @@
+# I file di casi condivisi con l'app Android (`gui/*_vectors.json`) devono restare byte
+# per byte identici alle copie in `flutter_app/assets/`: e' quello che rende verificabile
+# il contratto fra le due app, perche' entrambe eseguono lo stesso file.
+#
+# Finora ci riuscivano per caso. Con `core.autocrlf` attivo git riscrive ogni estrazione
+# con i fine riga di Windows: le due copie hanno lo stesso contenuto ma non gli stessi
+# byte, e confrontarle (o confrontarne gli md5) fallisce pur essendo tutto a posto. I
+# vettori erano stati scritti da uno script e mai riestratti, quindi erano rimasti con i
+# fine riga Unix; alla prima estrazione vera -- una fusione, un cambio di ramo, un clone
+# -- sono diventati CRLF da un lato solo.
+gui/*_vectors.json text eol=lf
