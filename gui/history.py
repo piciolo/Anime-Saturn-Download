@@ -3,6 +3,13 @@
 Remembers, per anime, which episode you were on (out of how many) and the exact
 position, so playback — streaming or from a downloaded file — can resume from there.
 Stored as a small JSON file in the user's app-data folder.
+
+Come nei preferiti, togliere una voce non cancella la riga: la riduce a una "lapide" che
+porta solo l'ora della rimozione (vedi :func:`gui.merge.is_removed`). Serve perche' la
+sincronizzazione confronta le due copie voce per voce: una riga cancellata di netto qui
+esisterebbe solo sul server, verrebbe letta come "nuova sull'altro dispositivo" e
+tornerebbe indietro dopo pochi secondi. Le lapidi scadute le pota :func:`prune_removed`,
+cosi' l'archivio non cresce per sempre.
 """
 
 from __future__ import annotations
@@ -14,7 +21,13 @@ from pathlib import Path
 from PySide6.QtCore import QStandardPaths
 
 from .canonical import canonical_key
-from .merge import merge_progress
+from .merge import (
+    as_tombstone,
+    as_watched,
+    is_removed,
+    merge_progress,
+    prune_removed,
+)
 from .net import sanitize_name
 
 # Below this fraction of the episode we treat it as "not really started"; at/above the
@@ -38,15 +51,24 @@ class WatchHistory:
         self._dir = Path(base) if base else (Path.home() / ".animesaturn_downloader")
         self._path = self._dir / "history.json"
         self._data: dict[str, dict] = self._load()
+        changed = self._prune()
         if self._migrate_keys():
+            changed = True
+        if changed:
             self._save()
 
     # ------------------------------------------------------------------ #
     def _load(self) -> dict[str, dict]:
         try:
-            return json.loads(self._path.read_text("utf-8"))
+            data = json.loads(self._path.read_text("utf-8"))
         except (OSError, ValueError):
             return {}
+        # Come nei preferiti: un file rovinato (o scritto a mano) non deve impedire
+        # l'avvio. Si scartano anche le singole voci che non sono dizionari, perche' da
+        # qui in poi tutto — migrazioni, potatura, fusione — si aspetta di trovarne uno.
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if isinstance(v, dict)}
 
     def _save(self) -> None:
         try:
@@ -88,6 +110,19 @@ class WatchHistory:
         if changed:
             self._data = migrated
         return changed
+
+    def _prune(self) -> bool:
+        """Drop tombstones that have outlived their job. True if any went.
+
+        All'apertura e non a ogni salvataggio: e' un giro su tutto l'archivio, qui non si
+        nota, e a ogni scrittura sarebbe lavoro ripetuto per nulla — una lapide che
+        scade mentre l'app e' aperta non fa danno a nessuno.
+        """
+        pruned = prune_removed(self._data, time.time())
+        if len(pruned) == len(self._data):
+            return False
+        self._data = pruned
+        return True
 
     def _stamp(self) -> float:
         # Wall-clock time so ordering is correct across sessions: whatever you just
@@ -131,7 +166,10 @@ class WatchHistory:
                 # l'altro.
                 "source_id": source_id or entry.get("source_id", ""),
                 "total_episodes": total_episodes or entry.get("total_episodes", 0),
-                "updated_at": self._stamp(),
+                # ``as_watched`` e non l'ora secca: se la riga era stata rimossa da un
+                # dispositivo con l'orologio avanti, un orario piu' vecchio della
+                # rimozione la lascerebbe fuori elenco proprio mentre la si guarda.
+                "updated_at": as_watched(entry, self._stamp()),
             }
         )
 
@@ -164,28 +202,82 @@ class WatchHistory:
 
     def resume_position(self, title: str, episode_number: str) -> int:
         """Saved position (ms) for a specific episode, or 0 if none/other episode."""
-        entry = self._data.get(self._key(title))
+        entry = self.entry(title)
         if entry and str(entry.get("episode_number")) == str(episode_number):
             return _to_int(entry.get("position_ms"))
         return 0
 
     def entry(self, title: str) -> dict | None:
-        return self._data.get(self._key(title))
+        """The resume point for an anime, or ``None`` when there is none.
+
+        Una lapide non e' un punto di ripresa: restituirla vorrebbe dire riproporre
+        all'utente l'episodio che ha appena cancellato.
+        """
+        entry = self._data.get(self._key(title))
+        return None if entry is None or is_removed(entry) else entry
 
     def recent(self, limit: int = 30) -> list[dict]:
-        """Resume entries, most-recently-watched first."""
+        """Resume entries, most-recently-watched first (tombstones excluded).
+
+        Le lapidi non sono voci nascoste, sono voci rimosse: restano nel file solo per
+        raccontare agli altri dispositivi che sono state rimosse.
+        """
         entries = sorted(
-            self._data.values(), key=lambda e: e.get("updated_at", 0), reverse=True
+            self._live(), key=lambda e: e.get("updated_at", 0), reverse=True
         )
         return entries[:limit]
 
+    def _live(self) -> list[dict]:
+        """Le voci vere, lapidi escluse."""
+        return [e for e in self._data.values() if not is_removed(e)]
+
+    def absorb(self, merged: dict) -> None:
+        """Adopt the sync's merged result, keeping what changed while it was in flight.
+
+        Non e' una sostituzione, ed e' importante che non lo sia. Il risultato che arriva
+        e' stato calcolato sulla copia di ``_data`` fotografata quando e' partita la
+        chiamata di rete: nel frattempo l'utente puo' aver premuto la X o lo Svuota, e
+        proprio nel momento piu' probabile, perche' aprire la scheda forza una
+        sincronizzazione ed e' lo stesso istante in cui si guarda l'elenco. Sovrascrivere
+        ``_data`` butterebbe quella rimozione anche dal disco, e non raggiungerebbe mai
+        gli altri dispositivi: la lapide servirebbe a niente.
+
+        Rifondere e' sicuro perche' le regole sono le stesse che ha usato la
+        sincronizzazione: la rimozione piu' recente vince di nuovo, il progresso piu'
+        avanti resta quello, e fondere due volte lo stesso risultato non lo cambia.
+        """
+        data: dict[str, dict] = {}
+        for key in set(self._data) | set(merged):
+            data[key] = merge_progress(
+                self._data.get(key) or {}, merged.get(key) or {}
+            )
+        self._data = prune_removed(data, time.time())
+        self._save()
+
     def remove(self, title: str) -> None:
-        if self._data.pop(self._key(title), None) is not None:
-            self._save()
+        """Take an anime out of the history, leaving a tombstone in its place.
+
+        La riga non si cancella: senza lapide la sincronizzazione la ritroverebbe solo
+        sul server, la prenderebbe per una voce nuova e la riscriverebbe qui — la X
+        funzionerebbe per i pochi secondi che separano due giri di sincronizzazione.
+        """
+        key = self._key(title)
+        entry = self._data.get(key)
+        if entry is None or is_removed(entry):
+            return
+        self._data[key] = as_tombstone(entry, time.time())
+        self._save()
 
     def clear(self) -> None:
-        self._data = {}
-        self._save()
+        """Empty the history, leaving a tombstone for each entry it held."""
+        now = time.time()
+        changed = False
+        for key, entry in list(self._data.items()):
+            if not is_removed(entry):
+                self._data[key] = as_tombstone(entry, now)
+                changed = True
+        if changed:
+            self._save()
 
 
 def _advance(episode_number: str, total: int) -> str:

@@ -132,6 +132,22 @@ class FavoritesStore:
         )
         return new_state
 
+    def absorb(self, merged: dict) -> None:
+        """Adopt the sync's merged result, keeping what changed while it was in flight.
+
+        Stessa ragione della cronologia (vedi ``WatchHistory.absorb``): il risultato
+        arriva da una fotografia di prima della chiamata di rete, e una stella toccata
+        nel frattempo vive solo qui. Sostituire l'archivio la perderebbe, e con essa la
+        lapide che deve portarla agli altri dispositivi.
+        """
+        data: dict[str, dict] = {}
+        for key in set(self._data) | set(merged):
+            data[key] = merge_favourite(
+                self._data.get(key) or {}, merged.get(key) or {}
+            )
+        self._data = data
+        self._save()
+
     def all(self) -> list[dict]:
         """Favourite entries, most recently added first (tombstones excluded)."""
         entries = [e for e in self._data.values() if e.get("is_favourite")]

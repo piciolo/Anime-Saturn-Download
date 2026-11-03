@@ -23,7 +23,7 @@ import httpx
 from PySide6.QtCore import QObject, QRunnable, QStandardPaths, Signal
 
 from .canonical import canonical_key
-from .merge import merge_favourite, merge_progress
+from .merge import merge_favourite, merge_progress, prune_removed
 
 _AUTH_HOST = "https://identitytoolkit.googleapis.com/v1"
 _TOKEN_HOST = "https://securetoken.googleapis.com/v1"
@@ -268,13 +268,21 @@ class CloudClient:
         merged_history: dict = {}
         for key in set(history_data) | set(remote_history):
             merged_history[key] = merge_progress(
-                history_data.get(key) or {}, remote_history.get(key) or {}
+                _as_record(history_data.get(key)), _as_record(remote_history.get(key))
             )
         merged_favorites: dict = {}
         for key in set(favorites_data) | set(remote_favorites):
             merged_favorites[key] = merge_favourite(
-                favorites_data.get(key) or {}, remote_favorites.get(key) or {}
+                _as_record(favorites_data.get(key)),
+                _as_record(remote_favorites.get(key)),
             )
+
+        # Le lapidi scadute si potano qui, non solo all'apertura dell'app: il PUT
+        # riscrive il sottoalbero dell'utente, quindi questo e' l'unico momento in cui
+        # anche il server dimentica le rimozioni che hanno finito il loro lavoro.
+        # Potare prima del PUT e restituire lo stesso risultato tiene allineati i due
+        # lati: altrimenti il server le rimanderebbe indietro al giro successivo.
+        merged_history = prune_removed(merged_history, time.time())
 
         # PUT replaces this user's subtree with the merged result. Safe because the merge
         # already contains everything that was remote — nothing is dropped.
@@ -313,6 +321,18 @@ class SyncWorker(QRunnable):
             self.signals.error.emit(str(exc))
         except Exception as exc:  # noqa: BLE001 - sync must never crash the app
             self.signals.error.emit(f"Sincronizzazione non riuscita: {exc}")
+
+
+def _as_record(value: object) -> dict:
+    """One archive entry, or an empty one when what arrived is not an entry at all.
+
+    Il database e' JSON libero e il file locale si puo' rovinare: una voce arrivata come
+    stringa o come lista farebbe fallire *tutta* la sincronizzazione invece della sola
+    riga malfatta, perche' le regole di fusione si aspettano un dizionario. Il gemello
+    Dart la tollera gia' (``asMap``): senza questa rete le due app non si comporterebbero
+    uguale sullo stesso dato.
+    """
+    return value if isinstance(value, dict) else {}
 
 
 def _canonicalise(entries: dict, merge) -> dict:

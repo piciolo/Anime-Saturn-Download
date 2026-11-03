@@ -598,11 +598,12 @@ class MainWindow(QMainWindow):
         self.io_pool.start(worker)
 
     def _on_sync_done(self, history: dict, favorites: dict) -> None:
-        # Adopt the merged result locally: it already contains everything this device had.
-        self.history._data = history
-        self.history._save()
-        self.favorites._data = favorites
-        self.favorites._save()
+        # Si fonde, non si sostituisce (vedi ``WatchHistory.absorb``): il risultato e'
+        # stato calcolato sulla fotografia di prima della chiamata di rete, e cio' che
+        # l'utente ha fatto nel frattempo — una X, uno Svuota, l'episodio appena chiuso —
+        # esiste solo qui.
+        self.history.absorb(history)
+        self.favorites.absorb(favorites)
         self._refresh_watch_views()
         if self.tabs.currentIndex() == self._favorites_tab_index:
             self._refresh_favorites()

@@ -10,14 +10,41 @@
     "byte per byte uguali. Nessuno dei due va modificato senza aggiornare l'altro.",
     "",
     "REGOLA (in ordine, la prima che decide vince):",
+    " 0. la rimozione, se e' la cosa piu' recente accaduta alla riga (vedi RIMOZIONI);",
     " 1. l'episodio piu' avanti vince (un episodio finito non torna mai indietro);",
     " 2. a parita' di episodio, la posizione piu' avanti vince;",
     " 3. a parita' di entrambi, vince chi ha l'orario piu' recente;",
     " 4. i metadati (titolo, poster, slug, totale episodi) si prendono dal vincitore,",
     "    ma un campo vuoto del vincitore viene riempito con quello del perdente.",
-    "Per i preferiti vale solo l'orario piu' recente: l'ultima decisione dell'utente."
+    "Per i preferiti vale solo l'orario piu' recente: l'ultima decisione dell'utente.",
+    "",
+    "RIMOZIONI. Togliere una voce dalla cronologia non cancella la riga: la riduce a una",
+    "'lapide' che porta solo titolo, portale e i due orari. La riga e' rimossa quando",
+    "'removed_at' e' piu' recente di 'updated_at', ed e' viva nel caso contrario (a",
+    "parita' esatta resta viva: a parita' non si fa sparire niente). I due orari si",
+    "fondono ciascuno per conto suo, prendendo il piu' recente dei due lati, percio' il",
+    "risultato non dipende dall'ordine della fusione ne' da quanti dispositivi ci sono.",
+    "Una lapide non porta progresso ('episode_number' vuoto, 'position_ms' a zero) ne'",
+    "metadati: non deve poter riproporre l'episodio cancellato, e deve restare leggera.",
+    "",
+    "POTATURA. Una lapide piu' vecchia di 90 giorni si butta (gruppo 'pruning'): a quel",
+    "punto ha raggiunto qualunque dispositivo che si sincronizzi. Passati i 90 giorni la",
+    "rimozione e' dimenticata da tutti, e un dispositivo che non si sincronizzava da",
+    "allora ha ancora la riga viva: al suo ritorno la riporta su per tutti. Nessun tetto",
+    "al numero, di proposito: tenere solo 'le N piu' recenti' butterebbe via meta' delle",
+    "rimozioni proprio quando servono tutte, cioe' subito dopo uno Svuota di una lista",
+    "lunga.",
+    "",
+    "COME SI LEGGONO I CASI. In 'progress' e 'favourites', 'expect' elenca i campi che il",
+    "risultato deve avere (un atteso 'null' vuol dire: quel campo non ci deve essere), e",
+    "'expect_removed' dice se la riga risulta rimossa — che non si legge da un campo solo,",
+    "ma dal confronto fra i due orari. Ogni caso viene provato anche a parti invertite: il",
+    "risultato non deve cambiare, altrimenti dipenderebbe da chi sincronizza per primo.",
+    "Il gruppo 'stamps' prova gli orari che la rimozione ('remove') e la ripresa ('watch')",
+    "scrivono sul record: stanno qui perche' le due app devono difendersi allo stesso modo",
+    "da un orologio sfasato, e una sola delle due che lo facesse non servirebbe a niente."
   ],
-  "version": 1,
+  "version": 3,
   "progress": [
     {
       "name": "posizione piu' avanti nello stesso episodio",
@@ -241,6 +268,210 @@
         "episode_number": "5",
         "source_id": "animesaturn"
       }
+    },
+    {
+      "name": "la rimozione piu' recente dell'ultima visione vince sul progresso remoto",
+      "a": {
+        "episode_number": "",
+        "position_ms": 0,
+        "updated_at": 100.0,
+        "removed_at": 500.0
+      },
+      "b": {
+        "episode_number": "4",
+        "position_ms": 600000,
+        "completed": false,
+        "updated_at": 100.0
+      },
+      "expect": {
+        "episode_number": "",
+        "position_ms": 0,
+        "updated_at": 100.0,
+        "removed_at": 500.0
+      },
+      "expect_removed": true
+    },
+    {
+      "name": "una lapide sola in giro resta una lapide: il lato vuoto non la cancella",
+      "a": {},
+      "b": {
+        "episode_number": "",
+        "position_ms": 0,
+        "updated_at": 100.0,
+        "removed_at": 500.0
+      },
+      "expect": {
+        "episode_number": "",
+        "position_ms": 0,
+        "removed_at": 500.0
+      },
+      "expect_removed": true
+    },
+    {
+      "name": "riprendere dopo aver rimosso riporta la riga, e la rimozione viaggia con lei",
+      "a": {
+        "episode_number": "",
+        "position_ms": 0,
+        "updated_at": 100.0,
+        "removed_at": 500.0
+      },
+      "b": {
+        "episode_number": "2",
+        "position_ms": 90000,
+        "completed": false,
+        "updated_at": 900.0
+      },
+      "expect": {
+        "episode_number": "2",
+        "position_ms": 90000,
+        "updated_at": 900.0,
+        "removed_at": 500.0
+      },
+      "expect_removed": false
+    },
+    {
+      "name": "la lapide non riporta indietro il punto di ripresa che si e' lasciata dietro",
+      "a": {
+        "episode_number": "",
+        "position_ms": 0,
+        "updated_at": 500.0,
+        "removed_at": 600.0
+      },
+      "b": {
+        "episode_number": "1",
+        "position_ms": 30000,
+        "completed": false,
+        "updated_at": 900.0
+      },
+      "expect": {
+        "episode_number": "1",
+        "position_ms": 30000,
+        "updated_at": 900.0
+      },
+      "expect_removed": false
+    },
+    {
+      "name": "fra due rimozioni vince la piu' recente",
+      "a": {
+        "episode_number": "",
+        "position_ms": 0,
+        "updated_at": 100.0,
+        "removed_at": 300.0
+      },
+      "b": {
+        "episode_number": "",
+        "position_ms": 0,
+        "updated_at": 200.0,
+        "removed_at": 400.0
+      },
+      "expect": {
+        "episode_number": "",
+        "updated_at": 200.0,
+        "removed_at": 400.0
+      },
+      "expect_removed": true
+    },
+    {
+      "name": "una lapide arrivata con progresso e metadati dentro si riappiattisce",
+      "a": {
+        "episode_number": "7",
+        "position_ms": 800000,
+        "completed": true,
+        "updated_at": 100.0,
+        "removed_at": 500.0,
+        "title": "Anime",
+        "slug": "anime",
+        "poster": "p.jpg",
+        "total_episodes": 12,
+        "source_id": "animeunity"
+      },
+      "b": {
+        "episode_number": "7",
+        "position_ms": 100,
+        "completed": false,
+        "updated_at": 100.0,
+        "title": "Anime",
+        "source_id": "animeunity"
+      },
+      "expect": {
+        "episode_number": "",
+        "position_ms": 0,
+        "title": "Anime",
+        "source_id": "animeunity",
+        "updated_at": 100.0,
+        "removed_at": 500.0,
+        "poster": null,
+        "slug": null,
+        "total_episodes": null,
+        "completed": null
+      },
+      "expect_removed": true
+    },
+    {
+      "name": "l'orario del risultato e' il piu' recente dei due, non quello del vincitore",
+      "a": {
+        "episode_number": "9",
+        "position_ms": 1000,
+        "completed": false,
+        "updated_at": 100.0
+      },
+      "b": {
+        "episode_number": "3",
+        "position_ms": 1000,
+        "completed": false,
+        "updated_at": 900.0
+      },
+      "expect": {
+        "episode_number": "9",
+        "position_ms": 1000,
+        "updated_at": 900.0
+      }
+    },
+    {
+      "name": "a parita' esatta fra rimozione e ultima visione la riga resta viva",
+      "a": {
+        "episode_number": "5",
+        "position_ms": 100,
+        "completed": false,
+        "updated_at": 300.0
+      },
+      "b": {
+        "episode_number": "",
+        "position_ms": 0,
+        "updated_at": 100.0,
+        "removed_at": 300.0
+      },
+      "expect": {
+        "episode_number": "5",
+        "position_ms": 100,
+        "updated_at": 300.0,
+        "removed_at": 300.0
+      },
+      "expect_removed": false
+    },
+    {
+      "name": "un orario corrotto vale come assente: non vince e non inchioda la riga",
+      "a": {
+        "episode_number": "5",
+        "position_ms": 100,
+        "completed": false,
+        "updated_at": "Infinity",
+        "removed_at": "NaN",
+        "title": "Corrotto"
+      },
+      "b": {
+        "episode_number": "5",
+        "position_ms": 100,
+        "completed": false,
+        "updated_at": 500.0,
+        "title": "Buono"
+      },
+      "expect": {
+        "title": "Buono",
+        "updated_at": 500.0,
+        "removed_at": null
+      },
+      "expect_removed": false
     }
   ],
   "favourites": [
@@ -300,6 +531,177 @@
       "expect": {
         "is_favourite": true,
         "source_id": "animeunity"
+      }
+    }
+  ],
+  "pruning": [
+    {
+      "name": "una lapide piu' vecchia di 90 giorni si butta, una recente resta",
+      "now": 10000000.0,
+      "records": {
+        "scaduta": {
+          "episode_number": "",
+          "position_ms": 0,
+          "updated_at": 1000.0,
+          "removed_at": 1000000.0
+        },
+        "fresca": {
+          "episode_number": "",
+          "position_ms": 0,
+          "updated_at": 1000.0,
+          "removed_at": 9500000.0
+        },
+        "viva": {
+          "episode_number": "3",
+          "position_ms": 120000,
+          "completed": false,
+          "updated_at": 2000.0
+        }
+      },
+      "expect_keys": [
+        "fresca",
+        "viva"
+      ]
+    },
+    {
+      "name": "il termine e' 90 giorni al secondo: uno prima resta, uno dopo si butta",
+      "now": 10000000.0,
+      "records": {
+        "appena_dentro": {
+          "episode_number": "",
+          "position_ms": 0,
+          "updated_at": 1000.0,
+          "removed_at": 2224001.0
+        },
+        "appena_fuori": {
+          "episode_number": "",
+          "position_ms": 0,
+          "updated_at": 1000.0,
+          "removed_at": 2223999.0
+        }
+      },
+      "expect_keys": [
+        "appena_dentro"
+      ]
+    },
+    {
+      "name": "una riga viva non si pota mai, nemmeno se vecchissima",
+      "now": 10000000.0,
+      "records": {
+        "antica": {
+          "episode_number": "5",
+          "position_ms": 10,
+          "completed": false,
+          "updated_at": 1.0
+        }
+      },
+      "expect_keys": [
+        "antica"
+      ]
+    },
+    {
+      "name": "la riga ripresa dopo una rimozione non si pota per la rimozione vecchia",
+      "now": 10000000.0,
+      "records": {
+        "ripresa": {
+          "episode_number": "4",
+          "position_ms": 5000,
+          "completed": false,
+          "updated_at": 9900000.0,
+          "removed_at": 1000000.0
+        }
+      },
+      "expect_keys": [
+        "ripresa"
+      ]
+    },
+    {
+      "name": "una lapide con l'orario nel futuro resta: l'orologio sbagliato non la scade",
+      "now": 10000000.0,
+      "records": {
+        "futura": {
+          "episode_number": "",
+          "position_ms": 0,
+          "updated_at": 1000.0,
+          "removed_at": 20000000.0
+        }
+      },
+      "expect_keys": [
+        "futura"
+      ]
+    }
+  ],
+  "stamps": [
+    {
+      "name": "la rimozione si segna all'ora in cui e' stata fatta, e azzera il progresso",
+      "action": "remove",
+      "record": {
+        "episode_number": "5",
+        "position_ms": 300000,
+        "duration_ms": 1400000,
+        "completed": false,
+        "updated_at": 1000.0,
+        "title": "Anime",
+        "slug": "anime",
+        "poster": "p.jpg",
+        "total_episodes": 12,
+        "source_id": "animesaturn"
+      },
+      "now": 2000.0,
+      "expect": {
+        "removed_at": 2000.0,
+        "updated_at": 1000.0,
+        "episode_number": "",
+        "position_ms": 0,
+        "title": "Anime",
+        "source_id": "animesaturn",
+        "poster": null,
+        "slug": null,
+        "total_episodes": null,
+        "duration_ms": null,
+        "completed": null
+      }
+    },
+    {
+      "name": "con l'orologio indietro la rimozione si segna comunque dopo l'ultima visione",
+      "action": "remove",
+      "record": {
+        "episode_number": "5",
+        "position_ms": 300000,
+        "updated_at": 5000.0
+      },
+      "now": 2000.0,
+      "expect": {
+        "removed_at": 5001.0,
+        "updated_at": 5000.0
+      }
+    },
+    {
+      "name": "riprendere a guardare si segna all'ora in cui si guarda",
+      "action": "watch",
+      "record": {
+        "episode_number": "",
+        "position_ms": 0,
+        "updated_at": 1000.0,
+        "removed_at": 2000.0
+      },
+      "now": 3000.0,
+      "expect": {
+        "updated_at": 3000.0
+      }
+    },
+    {
+      "name": "se la rimozione viene da un orologio avanti, la ripresa si segna dopo di lei",
+      "action": "watch",
+      "record": {
+        "episode_number": "",
+        "position_ms": 0,
+        "updated_at": 1000.0,
+        "removed_at": 9000.0
+      },
+      "now": 3000.0,
+      "expect": {
+        "updated_at": 9001.0
       }
     }
   ]
